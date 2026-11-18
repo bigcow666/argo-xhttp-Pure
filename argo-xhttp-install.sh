@@ -21,7 +21,7 @@ is_alive() {
 
 echo "=================================================="
 echo "   argo-xhttp-Pure (VLESS+XHTTP + Cloudflare Argo)"
-echo "   内存固化: Xray(35MiB) / Cloudflare(30MiB) + 128K切片"
+echo "   内存固化: Xray(35MiB) / Cloudflare(30MiB) 无切片版"
 echo "=================================================="
 
 echo "=== 1. 检查系统环境与架构 ==="
@@ -254,7 +254,7 @@ case "$OPT_CHOICE" in
 esac
 printf "%s" "$ADDR" > "$ADDR_FILE"
 
-echo "=== 5. 写入优化后的 Xray 本地回环配置 (集成 128KB 切片与静默过滤) ==="
+echo "=== 5. 写入优化后的 Xray 本地回环配置 (无切片满血版) ==="
 cat << JSON > "${XRAY_CONF_DIR}/config.json"
 {
   "log": {
@@ -277,9 +277,7 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
         "network": "xhttp",
         "xhttpSettings": {
           "path": "${XHTTP_PATH}",
-          "mode": "packet-up",
-          "scMaxEachPostBytes": 131072,
-          "scMaxBufferedPosts": 30
+          "mode": "packet-up"
         },
         "security": "none",
         "sockopt": {
@@ -466,24 +464,24 @@ if [ "$TUNNEL_MODE" = "2" ]; then
 fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
-# 原生自带 128KB (131072) 切片与多路复用优化的 extra 参数
-EXTRA_PARAM="&extra=%7B%22scMaxEachPostBytes%22%3A131072%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%224-8%22%2C%22cMaxReuseTimes%22%3A%2232-64%22%7D%7D"
+# 仅保留 xmux 多路复用优化的 extra 参数，移除了切片限制
+EXTRA_PARAM="&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A%224-8%22%2C%22cMaxReuseTimes%22%3A%2232-64%22%7D%7D"
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=none&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
 
 echo ""
 echo "=================================================="
-echo "✅ argo-xhttp-Pure (128KB 高吞吐版) 部署完成！"
+echo "✅ argo-xhttp-Pure (无切片满血版) 部署完成！"
 echo "=================================================="
 echo "固定配置目录     : /etc/argo-xhttp/"
 echo "内存与GC策略     : Xray(35M) / Cloudflare(30M), GOGC=20"
-echo "上行分片大小     : 128KB (131072 Bytes) 高速切片"
+echo "上行分片大小     : 默认 (无限制满血模式)"
 echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
 echo "连接地址 (优选)  : ${FINAL_ADDR}"
 echo "UUID             : ${UUID}"
 echo "Path             : ${XHTTP_PATH}"
 echo "=================================================="
-echo "📋 复制下方节点链接（自带 128KB extra 优化参数），在客户端中导入："
+echo "📋 复制下方节点链接（已移除切片限制），在客户端中导入："
 echo ""
 echo "${VLESS_LINK}"
 echo ""
