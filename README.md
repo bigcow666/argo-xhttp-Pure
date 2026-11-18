@@ -14,6 +14,7 @@
 **方式一：推荐（自动适配环境补装 `curl`，最稳定）**
 ```bash
 (apk add curl || (apt update && apt install -y curl)) && curl -Lo argo-xhttp-install.sh [https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/argo-xhttp-install.sh](https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/argo-xhttp-install.sh) && sh argo-xhttp-install.sh
+```
 **方式二：极简（直接使用系统自带 wget）**
 ```bash
 wget -O argo-xhttp-install.sh [https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/argo-xhttp-install.sh](https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/argo-xhttp-install.sh) && sh argo-xhttp-install.sh
