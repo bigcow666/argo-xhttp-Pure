@@ -1,6 +1,6 @@
 # argo-xhttp-Pure
 
-专为 **128MB 极限内存 VPS** 打造的纯净版 **Xray (VLESS + XHTTP) + Cloudflare Argo 固定隧道** 一键部署脚本。
+专为 **128MB 极限内存 Nat VPS** 打造的纯净版 **Xray (VLESS + XHTTP) + Cloudflare Argo 固定隧道** 一键部署脚本。
 
 ### 核心特性
 - **零外部端口暴露**：Xray 仅监听本地回环 `127.0.0.1:8080` 明文端口，无需申请 SSL 证书，公网零端口扫描风险。
