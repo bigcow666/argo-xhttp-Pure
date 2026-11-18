@@ -21,7 +21,7 @@ is_alive() {
 
 echo "=================================================="
 echo "   argo-xhttp-Pure (VLESS+XHTTP + Cloudflare Argo)"
-echo "   内存固化: Xray(45MiB) / Cloudflare(45MiB) + 128K切片"
+echo "   内存固化: Xray(35MiB) / Cloudflare(30MiB) + 128K切片"
 echo "=================================================="
 
 echo "=== 1. 检查系统环境与架构 ==="
@@ -321,7 +321,7 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
 }
 JSON
 
-echo "=== 6. 彻底物理清场旧进程并启动服务 (45M/45M + GOGC=50) ==="
+echo "=== 6. 彻底物理清场旧进程并启动服务 (35M/30M + GOGC=20) ==="
 
 # 6.1 清理旧服务与状态锁
 if command -v rc-service >/dev/null 2>&1; then
@@ -352,8 +352,8 @@ command_background="yes"
 pidfile="/run/xray.pid"
 rc_ulimit="-n 65535"
 
-export GOMEMLIMIT=45MiB
-export GOGC=50
+export GOMEMLIMIT=35MiB
+export GOGC=20
 
 depend() { need net; }
 
@@ -374,8 +374,8 @@ command_background="yes"
 pidfile="/run/cloudflared.pid"
 rc_ulimit="-n 65535"
 
-export GOMEMLIMIT=45MiB
-export GOGC=50
+export GOMEMLIMIT=30MiB
+export GOGC=20
 
 depend() { need net; }
 
@@ -401,8 +401,8 @@ After=network.target
 [Service]
 Type=simple
 LimitNOFILE=65535
-Environment="GOMEMLIMIT=45MiB"
-Environment="GOGC=50"
+Environment="GOMEMLIMIT=35MiB"
+Environment="GOGC=20"
 ExecStart=/usr/local/bin/xray run -c /usr/local/etc/xray/config.json
 Restart=on-failure
 RestartSec=3
@@ -419,8 +419,8 @@ After=network.target
 [Service]
 Type=simple
 LimitNOFILE=65535
-Environment="GOMEMLIMIT=45MiB"
-Environment="GOGC=50"
+Environment="GOMEMLIMIT=30MiB"
+Environment="GOGC=20"
 ExecStart=${CF_BIN} ${CF_RUN_ARGS}
 Restart=on-failure
 RestartSec=5
@@ -439,10 +439,10 @@ fi
 # 6.3 容器环境直接兜底拉起（过滤 Z 僵尸进程，若 OpenRC/Systemd 未拉起则直接 nohup 后台启动）
 sleep 2
 if ! is_alive "xray"; then
-    GOMEMLIMIT=45MiB GOGC=50 nohup /usr/local/bin/xray run -c "${XRAY_CONF_DIR}/config.json" >/dev/null 2>&1 &
+    GOMEMLIMIT=35MiB GOGC=20 nohup /usr/local/bin/xray run -c "${XRAY_CONF_DIR}/config.json" >/dev/null 2>&1 &
 fi
 if ! is_alive "cloudflared"; then
-    GOMEMLIMIT=45MiB GOGC=50 nohup ${CF_BIN} ${CF_RUN_ARGS} >/dev/null 2>&1 &
+    GOMEMLIMIT=30MiB GOGC=20 nohup ${CF_BIN} ${CF_RUN_ARGS} >/dev/null 2>&1 &
 fi
 
 sleep 2
@@ -476,7 +476,7 @@ echo "=================================================="
 echo "✅ argo-xhttp-Pure (128KB 高吞吐版) 部署完成！"
 echo "=================================================="
 echo "固定配置目录     : /etc/argo-xhttp/"
-echo "内存与GC策略     : Xray(45M) / Cloudflare(45M), GOGC=50"
+echo "内存与GC策略     : Xray(35M) / Cloudflare(30M), GOGC=20"
 echo "上行分片大小     : 128KB (131072 Bytes) 高速切片"
 echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
 echo "连接地址 (优选)  : ${FINAL_ADDR}"
