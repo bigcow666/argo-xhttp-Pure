@@ -323,7 +323,7 @@ command_args="run -c /usr/local/etc/xray/config.json"
 command_background="yes"
 pidfile="/run/xray.pid"
 
-export GOMEMLIMIT=35MiB
+export GOMEMLIMIT=40MiB
 export GOGC=50
 
 depend() { need net; }
@@ -360,7 +360,7 @@ After=network.target
 
 [Service]
 Type=simple
-Environment="GOMEMLIMIT=35MiB"
+Environment="GOMEMLIMIT=40MiB"
 Environment="GOGC=50"
 ExecStart=/usr/local/bin/xray run -c /usr/local/etc/xray/config.json
 Restart=on-failure
