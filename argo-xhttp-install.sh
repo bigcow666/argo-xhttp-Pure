@@ -1,8 +1,8 @@
 #!/bin/sh
-set -e
 
 CONF_DIR="/usr/local/etc/xray"
 STATE_FILE="${CONF_DIR}/argo_state.conf"
+TOKEN_FILE="${CONF_DIR}/argo_token.txt"
 mkdir -p "$CONF_DIR"
 
 echo "=================================================="
@@ -33,8 +33,8 @@ if [ "$(free -m | awk '/^Swap:/ {print $2}')" -eq 0 ]; then
     if [ ! -f /swapfile ]; then
         dd if=/dev/zero of=/swapfile bs=1M count=256 status=none
         chmod 600 /swapfile
-        mkswap /swapfile >/dev/null
-        swapon /swapfile || true
+        mkswap /swapfile >/dev/null 2>&1
+        swapon /swapfile >/dev/null 2>&1 || true
         grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
         echo "✅ 已开启 256MB Swap 兜底。"
     fi
@@ -60,26 +60,60 @@ fi
 CF_BIN=$(command -v cloudflared || echo "/usr/local/bin/cloudflared")
 
 echo ""
-echo "=== 4. 自动检测历史配置 (UUID / Path / 隧道参数) ==="
-# 载入历史状态文件
+echo "=== 4. 自动检测历史配置 (UUID / Path / 域名 / Token) ==="
+# 1. 读取本脚本保存的历史状态
 [ -f "$STATE_FILE" ] && . "$STATE_FILE"
+[ -f "$TOKEN_FILE" ] && SAVED_TOKEN=$(cat "$TOKEN_FILE")
 
-# 若无状态文件，尝试从现有 config.json 和系统服务中提取
-if [ -z "$SAVED_UUID" ] && [ -f "${CONF_DIR}/config.json" ]; then
-    SAVED_UUID=$(grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "${CONF_DIR}/config.json" | head -n 1 || true)
-    SAVED_PATH=$(grep '"path":' "${CONF_DIR}/config.json" | sed -E 's/.*"path":[[:space:]]*"([^"]+)".*/\1/' | head -n 1 || true)
+# 2. 深度扫描本机已有的 UUID 与 Path
+if [ -z "$SAVED_UUID" ]; then
+    for cf in "${CONF_DIR}/config.json" /etc/xray/config.json /usr/local/etc/xray/*.json; do
+        if [ -f "$cf" ]; then
+            SAVED_UUID=$(grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$cf" | head -n 1 || true)
+            SAVED_PATH=$(grep '"path":' "$cf" | sed -E 's/.*"path":[[:space:]]*"([^"]+)".*/\1/' | head -n 1 || true)
+            [ -n "$SAVED_UUID" ] && break
+        fi
+    done
 fi
 
-if [ -z "$SAVED_TOKEN" ]; then
-    for f in /etc/systemd/system/cloudflared*.service /etc/init.d/cloudflared*; do
-        if [ -f "$f" ]; then
-            EXTRACTED=$(grep -oE 'eyJh[A-Za-z0-9_-]+' "$f" | head -n 1 || true)
-            if [ -n "$EXTRACTED" ]; then
-                SAVED_TOKEN="$EXTRACTED"
+# 3. 深度扫描本机已有的固定隧道域名 (config.yml 等)
+if [ -z "$SAVED_DOMAIN" ]; then
+    for yf in "${CONF_DIR}/config.yml" /etc/cloudflared/config.yml /root/.cloudflared/config.yml /etc/xray/argo/config.yml; do
+        if [ -f "$yf" ]; then
+            EXTRACTED_DOM=$(grep 'hostname:' "$yf" | head -n 1 | sed -E 's/.*hostname:[[:space:]]*([^[:space:]"'\'']+).*/\1/' || true)
+            if [ -n "$EXTRACTED_DOM" ]; then
+                SAVED_DOMAIN="$EXTRACTED_DOM"
                 break
             fi
         fi
     done
+fi
+
+# 4. 深度扫描本机已有的 Token 或 JSON 凭证
+if [ -z "$SAVED_TOKEN" ]; then
+    # 先找 JSON 凭证文件
+    for jf in "${CONF_DIR}/tunnel.json" /etc/cloudflared/*.json /root/.cloudflared/*.json /etc/xray/argo/*.json; do
+        if [ -f "$jf" ] && grep -q '"TunnelID"' "$jf" 2>/dev/null; then
+            SAVED_TOKEN=$(cat "$jf")
+            break
+        fi
+    done
+fi
+
+if [ -z "$SAVED_TOKEN" ]; then
+    # 再从服务脚本和运行进程里找 eyJh Token
+    for f in /etc/systemd/system/cloudflared*.service /etc/init.d/cloudflared*; do
+        if [ -f "$f" ]; then
+            EXTRACTED_TOK=$(grep -oE 'eyJh[A-Za-z0-9_-]+' "$f" | head -n 1 || true)
+            if [ -n "$EXTRACTED_TOK" ]; then
+                SAVED_TOKEN="$EXTRACTED_TOK"
+                break
+            fi
+        fi
+    done
+    if [ -z "$SAVED_TOKEN" ]; then
+        SAVED_TOKEN=$(ps aux | grep cloudflared | grep -oE 'eyJh[A-Za-z0-9_-]+' | head -n 1 || true)
+    fi
 fi
 
 # 4.1 确认或生成 UUID 与 Path
@@ -123,7 +157,7 @@ if [ "$TUNNEL_MODE" = "1" ]; then
 
     if [ -n "$SAVED_DOMAIN" ]; then
         echo "✅ 检测到已有固定隧道域名: ${SAVED_DOMAIN}"
-        printf "直接回车沿用该域名，或输入新域名覆盖: "
+        printf "直接回车沿用 [${SAVED_DOMAIN}]，或输入新域名覆盖: "
         read -r INPUT_DOMAIN < /dev/tty
         CF_DOMAIN="${INPUT_DOMAIN:-$SAVED_DOMAIN}"
     else
@@ -133,7 +167,9 @@ if [ "$TUNNEL_MODE" = "1" ]; then
     fi
 
     if [ -n "$SAVED_TOKEN" ]; then
-        echo "✅ 检测到已有隧道凭证 (Token / JSON)。"
+        # 显示前 25 个字符方便核对
+        TOK_PREVIEW=$(echo "$SAVED_TOKEN" | cut -c 1-25)
+        echo "✅ 检测到已有隧道凭证: ${TOK_PREVIEW}..."
         printf "直接回车沿用现有凭证，或粘贴新 Token / JSON 覆盖: "
         read -r INPUT_TOKEN < /dev/tty
         CF_TOKEN="${INPUT_TOKEN:-$SAVED_TOKEN}"
@@ -145,7 +181,7 @@ if [ "$TUNNEL_MODE" = "1" ]; then
 
     # 判断用户输入的是 fscarmen 的 JSON 还是官方 eyJh Token
     if echo "$CF_TOKEN" | grep -q '{'; then
-        echo "🔧 检测到 JSON 格式 Token，正在生成本地隧道证书与 config.yml..."
+        echo "🔧 检测到 JSON 格式凭证，正在生成本地 tunnel.json 与 config.yml..."
         echo "$CF_TOKEN" > "${CONF_DIR}/tunnel.json"
         TUNNEL_ID=$(echo "$CF_TOKEN" | grep -oE '"TunnelID":[[:space:]]*"[^"]+"' | sed -E 's/.*"([^"]+)"/\1/')
         cat << YAML > "${CONF_DIR}/config.yml"
@@ -199,6 +235,16 @@ case "$OPT_CHOICE" in
         ADDR="${SAVED_ADDR:-}"
         ;;
 esac
+
+# 立即保存状态（防止后续服务重启波动导致配置未保存）
+cat << STATE > "$STATE_FILE"
+SAVED_UUID="${UUID}"
+SAVED_PATH="${XHTTP_PATH}"
+SAVED_DOMAIN="${CF_DOMAIN}"
+SAVED_ADDR="${ADDR}"
+STATE
+[ -n "$CF_TOKEN" ] && printf "%s" "$CF_TOKEN" > "$TOKEN_FILE"
+chmod 600 "$STATE_FILE" "$TOKEN_FILE" 2>/dev/null || true
 
 echo "=== 5. 写入 Xray 本地回环配置（仅监听 127.0.0.1:8080）==="
 cat << JSON > "${CONF_DIR}/config.json"
@@ -276,6 +322,7 @@ depend() { need net; }
 OPENRC_XRAY
     chmod +x /etc/init.d/xray
 
+    # 移除 need xray 避免 OpenRC 连带重启引发 flock 资源锁冲突
     cat << OPENRC_CF > /etc/init.d/cloudflared
 #!/sbin/openrc-run
 name="cloudflared"
@@ -287,14 +334,17 @@ pidfile="/run/cloudflared.pid"
 export GOMEMLIMIT=30MiB
 export GOGC=50
 
-depend() { need net xray; }
+depend() { need net; }
 OPENRC_CF
     chmod +x /etc/init.d/cloudflared
 
     rc-update add xray default >/dev/null 2>&1 || true
     rc-update add cloudflared default >/dev/null 2>&1 || true
-    rc-service xray restart
-    rc-service cloudflared restart
+    rc-service cloudflared stop >/dev/null 2>&1 || true
+    rc-service xray stop >/dev/null 2>&1 || true
+    sleep 1
+    rc-service xray start
+    rc-service cloudflared start
 else
     cat << 'SYS_XRAY' > /etc/systemd/system/xray.service
 [Unit]
@@ -316,7 +366,7 @@ SYS_XRAY
     cat << SYS_CF > /etc/systemd/system/cloudflared.service
 [Unit]
 Description=Cloudflare Argo Tunnel (Lite Single-Connection)
-After=network.target xray.service
+After=network.target
 
 [Service]
 Type=simple
@@ -332,7 +382,8 @@ SYS_CF
 
     systemctl daemon-reload
     systemctl enable xray cloudflared >/dev/null 2>&1 || true
-    systemctl restart xray cloudflared
+    systemctl restart xray
+    systemctl restart cloudflared
 fi
 
 # 若为临时隧道，等待提取 trycloudflare.com 域名
@@ -354,19 +405,7 @@ if [ "$TUNNEL_MODE" = "2" ]; then
     fi
 fi
 
-# 若未指定优选地址，则默认使用隧道域名
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
-
-# 保存状态供下次重跑自动读取
-cat << STATE > "$STATE_FILE"
-SAVED_UUID='${UUID}'
-SAVED_PATH='${XHTTP_PATH}'
-SAVED_DOMAIN='${CF_DOMAIN}'
-SAVED_TOKEN='${CF_TOKEN}'
-SAVED_ADDR='${ADDR}'
-STATE
-chmod 600 "$STATE_FILE"
-
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=none&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2%2Chttp%2F1.1&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up#Argo-XHTTP-${CF_DOMAIN}"
 
 echo ""
