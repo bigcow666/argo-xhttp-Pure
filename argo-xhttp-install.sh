@@ -29,10 +29,10 @@ esac
 
 if command -v apk >/dev/null 2>&1; then
     OS="alpine"
-    apk update && apk add --no-cache curl unzip ca-certificates openssl grep sed
+    apk update && apk add --no-cache curl unzip ca-certificates openssl grep sed psmisc
 elif command -v apt-get >/dev/null 2>&1; then
     OS="debian"
-    apt-get update && apt-get install -y curl unzip ca-certificates openssl grep sed
+    apt-get update && apt-get install -y curl unzip ca-certificates openssl grep sed psmisc
 else
     echo "❌ 仅支持 Alpine 或 Debian/Ubuntu 系统"; exit 1
 fi
@@ -223,7 +223,7 @@ echo "  [2] cf.090227.xyz"
 echo "  [3] saas.sin.fan"
 echo "  [4] cf.0sm.com"
 echo "  [5] freeyx.cloudflare88.eu.org"
-echo "  [6] 手动输入自定义优选域名或优选 IP"
+echo "  [6] 手动输入自定义优选域名或 IP"
 if [ -f "$ADDR_FILE" ]; then
     echo "  [回车] 沿用已固定的优选设置 (${SAVED_ADDR:-不优选/跟随隧道域名})"
 else
@@ -279,7 +279,13 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
           "path": "${XHTTP_PATH}",
           "mode": "packet-up"
         },
-        "security": "none"
+        "security": "none",
+        "sockopt": {
+          "trustedXForwardedFor": [
+            "CF-Connecting-IP",
+            "X-Forwarded-For"
+          ]
+        }
       }
     }
   ],
@@ -313,8 +319,13 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
 }
 JSON
 
-echo "=== 6. 启动双进程极限低内存守护服务 ==="
+echo "=== 6. 彻底清理残留进程并启动双进程极限低内存守护服务 ==="
 if [ "$OS" = "alpine" ]; then
+    rc-service cloudflared stop >/dev/null 2>&1 || true
+    rc-service xray stop >/dev/null 2>&1 || true
+    killall -9 cloudflared xray >/dev/null 2>&1 || true
+    rm -f /run/xray.pid /run/cloudflared.pid
+
     cat << 'OPENRC_XRAY' > /etc/init.d/xray
 #!/sbin/openrc-run
 name="xray"
@@ -322,11 +333,17 @@ command="/usr/local/bin/xray"
 command_args="run -c /usr/local/etc/xray/config.json"
 command_background="yes"
 pidfile="/run/xray.pid"
+rc_ulimit="-n 65535"
 
-export GOMEMLIMIT=40MiB
+export GOMEMLIMIT=35MiB
 export GOGC=50
 
 depend() { need net; }
+
+stop_post() {
+    killall -9 xray >/dev/null 2>&1 || true
+    rm -f /run/xray.pid
+}
 OPENRC_XRAY
     chmod +x /etc/init.d/xray
 
@@ -337,22 +354,30 @@ command="${CF_BIN}"
 command_args="${CF_RUN_ARGS}"
 command_background="yes"
 pidfile="/run/cloudflared.pid"
+rc_ulimit="-n 65535"
 
 export GOMEMLIMIT=30MiB
 export GOGC=50
 
 depend() { need net; }
+
+stop_post() {
+    killall -9 cloudflared >/dev/null 2>&1 || true
+    rm -f /run/cloudflared.pid
+}
 OPENRC_CF
     chmod +x /etc/init.d/cloudflared
 
     rc-update add xray default >/dev/null 2>&1 || true
     rc-update add cloudflared default >/dev/null 2>&1 || true
-    rc-service cloudflared stop >/dev/null 2>&1 || true
-    rc-service xray stop >/dev/null 2>&1 || true
     sleep 1
     rc-service xray start
+    sleep 1
     rc-service cloudflared start
 else
+    systemctl stop cloudflared xray >/dev/null 2>&1 || true
+    killall -9 cloudflared xray >/dev/null 2>&1 || true
+
     cat << 'SYS_XRAY' > /etc/systemd/system/xray.service
 [Unit]
 Description=Xray Local Loopback Service
@@ -360,7 +385,8 @@ After=network.target
 
 [Service]
 Type=simple
-Environment="GOMEMLIMIT=40MiB"
+LimitNOFILE=65535
+Environment="GOMEMLIMIT=35MiB"
 Environment="GOGC=50"
 ExecStart=/usr/local/bin/xray run -c /usr/local/etc/xray/config.json
 Restart=on-failure
@@ -377,6 +403,7 @@ After=network.target
 
 [Service]
 Type=simple
+LimitNOFILE=65535
 Environment="GOMEMLIMIT=30MiB"
 Environment="GOGC=50"
 ExecStart=${CF_BIN} ${CF_RUN_ARGS}
@@ -389,8 +416,9 @@ SYS_CF
 
     systemctl daemon-reload
     systemctl enable xray cloudflared >/dev/null 2>&1 || true
-    systemctl restart xray
-    systemctl restart cloudflared
+    systemctl start xray
+    sleep 1
+    systemctl start cloudflared
 fi
 
 if [ "$TUNNEL_MODE" = "2" ]; then
@@ -399,7 +427,7 @@ if [ "$TUNNEL_MODE" = "2" ]; then
     for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
         sleep 1
         if [ -f /var/log/cloudflared.log ]; then
-            CF_DOMAIN=$(grep -oE 'https://[a-zA-Z0-9-]+.trycloudflare.com' /var/log/cloudflared.log | head -n 1 | sed 's/https:\/\///' || true)
+            CF_DOMAIN=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /var/log/cloudflared.log | head -n 1 | sed 's/https:\/\///' || true)
             [ -n "$CF_DOMAIN" ] && break
         fi
     done
