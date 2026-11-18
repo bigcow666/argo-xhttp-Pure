@@ -96,7 +96,6 @@ if [ ! -s "$DOMAIN_FILE" ] && [ -f "${XRAY_CONF_DIR}/argo_state.conf" ]; then
     [ -n "$OLD_DOM" ] && printf "%s" "$OLD_DOM" > "$DOMAIN_FILE"
 fi
 
-# 读取固定文件中的所有现有值
 SAVED_UUID=$(cat "$UUID_FILE" 2>/dev/null || true)
 SAVED_PATH=$(cat "$PATH_FILE" 2>/dev/null || true)
 SAVED_MODE=$(cat "$MODE_FILE" 2>/dev/null || true)
@@ -151,7 +150,6 @@ if [ "$TUNNEL_MODE" = "1" ]; then
     echo "   也可手动去 CF Zero Trust 隧道后台添加（回源填 http://127.0.0.1:8080）。"
     echo "--------------------------------------------------"
 
-    # 固定域名读取与写入
     if [ -n "$SAVED_DOMAIN" ]; then
         echo "✅ 已锁定固定隧道域名: ${SAVED_DOMAIN}"
         printf "直接回车沿用 [${SAVED_DOMAIN}]，或输入新域名覆盖: "
@@ -172,7 +170,6 @@ if [ "$TUNNEL_MODE" = "1" ]; then
         echo "✅ 固定隧道域名已永久写入 ${DOMAIN_FILE}"
     fi
 
-    # 固定 Token 读取与写入
     if [ -n "$SAVED_TOKEN" ]; then
         TOK_PREVIEW=$(echo "$SAVED_TOKEN" | cut -c 1-28)
         echo "✅ 已锁定隧道凭证 (Token/JSON): ${TOK_PREVIEW}..."
@@ -194,7 +191,6 @@ if [ "$TUNNEL_MODE" = "1" ]; then
         echo "✅ 隧道凭证已永久写入 ${TOKEN_FILE}"
     fi
 
-    # 判断 JSON 凭证还是官方 eyJh Token
     if echo "$CF_TOKEN" | grep -q '{'; then
         echo "🔧 检测到 JSON 格式凭证，正在生成 ${PERSIST_DIR}/tunnel.json 与 config.yml..."
         printf "%s" "$CF_TOKEN" > "${PERSIST_DIR}/tunnel.json"
@@ -208,7 +204,7 @@ ingress:
     service: http://127.0.0.1:8080
   - service: http_status:404
 YAML
-        CF_RUN_ARGS="tunnel --no-autoupdate --ha-connections 1 --config ${PERSIST_DIR}/config.yml run"
+        CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --config ${PERSIST_DIR}/config.yml run"
     else
         CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 run --token ${CF_TOKEN}"
     fi
@@ -224,12 +220,12 @@ echo "请选择优选域名 / 客户端连接地址："
 echo "  [0] 不优选，直接使用隧道域名本身"
 echo "  [1] cloudflare.182682.xyz (推荐)"
 echo "  [2] cf.090227.xyz"
-echo "  [3] saas.sin.fan"
-echo "  [4] cf.0sm.com"
-echo "  [5] freeyx.cloudflare88.eu.org"
+echo "  [3] icook.hk"
+echo "  [4] visa.com.sg"
+echo "  [5] time.is"
 echo "  [6] 手动输入自定义优选域名或优选 IP"
-if [ -n "$SAVED_ADDR" ]; then
-    echo "  [回车] 沿用已固定的优选地址 (${SAVED_ADDR})"
+if [ -f "$ADDR_FILE" ]; then
+    echo "  [回车] 沿用已固定的优选设置 (${SAVED_ADDR:-不优选/跟随隧道域名})"
 else
     echo "  [回车] 默认使用 [1] cloudflare.182682.xyz"
 fi
@@ -237,19 +233,19 @@ printf "请输入序号 [0-6]: "
 read -r OPT_CHOICE < /dev/tty
 
 case "$OPT_CHOICE" in
-    0) ADDR="$CF_DOMAIN" ;;
+    0) ADDR="" ;;
     1) ADDR="cloudflare.182682.xyz" ;;
     2) ADDR="cf.090227.xyz" ;;
-    3) ADDR="saas.sin.fan" ;;
-    4) ADDR="freeyx.cloudflare88.eu.org" ;;
+    3) ADDR="icook.hk" ;;
+    4) ADDR="visa.com.sg" ;;
     5) ADDR="time.is" ;;
     6)
         printf "请输入你的自定义优选域名或 IP: "
         read -r CUSTOM_ADDR < /dev/tty
-        ADDR="${CUSTOM_ADDR:-$CF_DOMAIN}"
+        ADDR="$CUSTOM_ADDR"
         ;;
     *)
-        if [ -n "$SAVED_ADDR" ]; then
+        if [ -f "$ADDR_FILE" ]; then
             ADDR="$SAVED_ADDR"
         else
             ADDR="cloudflare.182682.xyz"
@@ -413,11 +409,10 @@ if [ "$TUNNEL_MODE" = "2" ]; then
     else
         echo "✅ 成功获取临时隧道域名: ${CF_DOMAIN}"
     fi
-    [ "$OPT_CHOICE" = "0" ] && ADDR="$CF_DOMAIN"
 fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
-VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=none&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2%2Chttp%2F1.1&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up#Argo-XHTTP-${CF_DOMAIN}"
+VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=none&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
 
 echo ""
@@ -425,13 +420,13 @@ echo "=================================================="
 echo "✅ argo-xhttp-Pure 部署完成！"
 echo "=================================================="
 echo "固定配置目录     : /etc/argo-xhttp/"
-echo "隧道类型         : $([ "$TUNNEL_MODE" = "1" ] && echo "固定隧道" || echo "临时隧道 (重启会变)")"
+echo "隧道类型         : $([ "$TUNNEL_MODE" = "1" ] && echo "固定隧道 (HTTP/2)" || echo "临时隧道 (HTTP/2, 重启会变)")"
 echo "本地回源地址     : http://127.0.0.1:8080"
 echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
 echo "连接地址 (优选)  : ${FINAL_ADDR}"
 echo "UUID             : ${UUID}"
 echo "Path             : ${XHTTP_PATH}"
-echo "uTLS 浏览器指纹  : chrome"
+echo "TLS / ALPN       : tls / h2 (Chrome 指纹)"
 echo "=================================================="
 echo "📋 复制下方节点链接，直接在 v2rayNG 中【从剪贴板导入】："
 echo ""
