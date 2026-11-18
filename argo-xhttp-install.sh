@@ -1,13 +1,22 @@
 #!/bin/sh
 
-CONF_DIR="/usr/local/etc/xray"
-STATE_FILE="${CONF_DIR}/argo_state.conf"
-TOKEN_FILE="${CONF_DIR}/argo_token.txt"
-mkdir -p "$CONF_DIR"
+# 固定持久化配置目录（所有参数独立文件存储，永不丢失）
+PERSIST_DIR="/etc/argo-xhttp"
+XRAY_CONF_DIR="/usr/local/etc/xray"
+mkdir -p "$PERSIST_DIR" "$XRAY_CONF_DIR"
+chmod 700 "$PERSIST_DIR"
+
+UUID_FILE="${PERSIST_DIR}/uuid"
+PATH_FILE="${PERSIST_DIR}/path"
+MODE_FILE="${PERSIST_DIR}/mode"
+DOMAIN_FILE="${PERSIST_DIR}/domain"
+TOKEN_FILE="${PERSIST_DIR}/token"
+ADDR_FILE="${PERSIST_DIR}/addr"
+LINK_FILE="${PERSIST_DIR}/vless.link"
 
 echo "=================================================="
 echo "   argo-xhttp-Pure (VLESS+XHTTP + Cloudflare Argo)"
-echo "   专为 128MB 极限内存 VPS 优化 | 本地回环 8080 零端口"
+echo "   配置固定目录: /etc/argo-xhttp | 本地回环: 8080"
 echo "=================================================="
 
 echo "=== 1. 检查系统环境与架构 ==="
@@ -60,73 +69,54 @@ fi
 CF_BIN=$(command -v cloudflared || echo "/usr/local/bin/cloudflared")
 
 echo ""
-echo "=== 4. 自动检测历史配置 (UUID / Path / 域名 / Token) ==="
-# 1. 读取本脚本保存的历史状态
-[ -f "$STATE_FILE" ] && . "$STATE_FILE"
-[ -f "$TOKEN_FILE" ] && SAVED_TOKEN=$(cat "$TOKEN_FILE")
+echo "=== 4. 读取或初始化固定配置 (/etc/argo-xhttp) ==="
 
-# 2. 深度扫描本机已有的 UUID 与 Path
-if [ -z "$SAVED_UUID" ]; then
-    for cf in "${CONF_DIR}/config.json" /etc/xray/config.json /usr/local/etc/xray/*.json; do
-        if [ -f "$cf" ]; then
-            SAVED_UUID=$(grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$cf" | head -n 1 || true)
-            SAVED_PATH=$(grep '"path":' "$cf" | sed -E 's/.*"path":[[:space:]]*"([^"]+)".*/\1/' | head -n 1 || true)
-            [ -n "$SAVED_UUID" ] && break
-        fi
-    done
+# 兼容迁移：若固定目录尚无文件，尝试从旧版配置或本机现有服务中抓取一次并写入固定目录
+if [ ! -s "$UUID_FILE" ] && [ -f "${XRAY_CONF_DIR}/config.json" ]; then
+    OLD_UUID=$(grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "${XRAY_CONF_DIR}/config.json" | head -n 1 || true)
+    [ -n "$OLD_UUID" ] && printf "%s" "$OLD_UUID" > "$UUID_FILE"
 fi
-
-# 3. 深度扫描本机已有的固定隧道域名 (config.yml 等)
-if [ -z "$SAVED_DOMAIN" ]; then
-    for yf in "${CONF_DIR}/config.yml" /etc/cloudflared/config.yml /root/.cloudflared/config.yml /etc/xray/argo/config.yml; do
-        if [ -f "$yf" ]; then
-            EXTRACTED_DOM=$(grep 'hostname:' "$yf" | head -n 1 | sed -E 's/.*hostname:[[:space:]]*([^[:space:]"'\'']+).*/\1/' || true)
-            if [ -n "$EXTRACTED_DOM" ]; then
-                SAVED_DOMAIN="$EXTRACTED_DOM"
-                break
-            fi
-        fi
-    done
+if [ ! -s "$PATH_FILE" ] && [ -f "${XRAY_CONF_DIR}/config.json" ]; then
+    OLD_PATH=$(grep '"path":' "${XRAY_CONF_DIR}/config.json" | sed -E 's/.*"path":[[:space:]]*"([^"]+)".*/\1/' | head -n 1 || true)
+    [ -n "$OLD_PATH" ] && printf "%s" "$OLD_PATH" > "$PATH_FILE"
 fi
-
-# 4. 深度扫描本机已有的 Token 或 JSON 凭证
-if [ -z "$SAVED_TOKEN" ]; then
-    # 先找 JSON 凭证文件
-    for jf in "${CONF_DIR}/tunnel.json" /etc/cloudflared/*.json /root/.cloudflared/*.json /etc/xray/argo/*.json; do
-        if [ -f "$jf" ] && grep -q '"TunnelID"' "$jf" 2>/dev/null; then
-            SAVED_TOKEN=$(cat "$jf")
-            break
-        fi
-    done
-fi
-
-if [ -z "$SAVED_TOKEN" ]; then
-    # 再从服务脚本和运行进程里找 eyJh Token
-    for f in /etc/systemd/system/cloudflared*.service /etc/init.d/cloudflared*; do
+if [ ! -s "$TOKEN_FILE" ]; then
+    for f in "${XRAY_CONF_DIR}/argo_token.txt" /etc/systemd/system/cloudflared*.service /etc/init.d/cloudflared*; do
         if [ -f "$f" ]; then
-            EXTRACTED_TOK=$(grep -oE 'eyJh[A-Za-z0-9_-]+' "$f" | head -n 1 || true)
-            if [ -n "$EXTRACTED_TOK" ]; then
-                SAVED_TOKEN="$EXTRACTED_TOK"
+            OLD_TOK=$(grep -oE 'eyJh[A-Za-z0-9_-]+' "$f" | head -n 1 || true)
+            if [ -n "$OLD_TOK" ]; then
+                printf "%s" "$OLD_TOK" > "$TOKEN_FILE"
                 break
             fi
         fi
     done
-    if [ -z "$SAVED_TOKEN" ]; then
-        SAVED_TOKEN=$(ps aux | grep cloudflared | grep -oE 'eyJh[A-Za-z0-9_-]+' | head -n 1 || true)
-    fi
+fi
+if [ ! -s "$DOMAIN_FILE" ] && [ -f "${XRAY_CONF_DIR}/argo_state.conf" ]; then
+    OLD_DOM=$(grep 'SAVED_DOMAIN=' "${XRAY_CONF_DIR}/argo_state.conf" | cut -d= -f2 | tr -d '"' | tr -d "'" || true)
+    [ -n "$OLD_DOM" ] && printf "%s" "$OLD_DOM" > "$DOMAIN_FILE"
 fi
 
-# 4.1 确认或生成 UUID 与 Path
+# 读取固定文件中的所有现有值
+SAVED_UUID=$(cat "$UUID_FILE" 2>/dev/null || true)
+SAVED_PATH=$(cat "$PATH_FILE" 2>/dev/null || true)
+SAVED_MODE=$(cat "$MODE_FILE" 2>/dev/null || true)
+SAVED_DOMAIN=$(cat "$DOMAIN_FILE" 2>/dev/null || true)
+SAVED_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || true)
+SAVED_ADDR=$(cat "$ADDR_FILE" 2>/dev/null || true)
+
+# ---------------- 4.1 UUID 与 Path ----------------
 if [ -n "$SAVED_UUID" ] && [ -n "$SAVED_PATH" ]; then
-    echo "✅ 检测到已有 Xray 节点配置："
+    echo "✅ 已锁定固定 UUID 与 Path："
     echo "   UUID : ${SAVED_UUID}"
     echo "   Path : ${SAVED_PATH}"
-    printf "是否保留现有 UUID 和 Path？[Y/n (直接回车保留，输入 n 重新生成)]: "
-    read -r KEEP_UUID < /dev/tty
-    if [ "$KEEP_UUID" = "n" ] || [ "$KEEP_UUID" = "N" ]; then
+    printf "直接回车沿用，或输入 n 重新随机生成 [Y/n]: "
+    read -r NEW_ID_CHOICE < /dev/tty
+    if [ "$NEW_ID_CHOICE" = "n" ] || [ "$NEW_ID_CHOICE" = "N" ]; then
         UUID=$(/usr/local/bin/xray uuid)
         XHTTP_PATH="/$(openssl rand -hex 6)"
-        echo "🔄 已重新生成 UUID 与 Path。"
+        printf "%s" "$UUID" > "$UUID_FILE"
+        printf "%s" "$XHTTP_PATH" > "$PATH_FILE"
+        echo "🔄 已生成并写入新 UUID 与 Path。"
     else
         UUID="$SAVED_UUID"
         XHTTP_PATH="$SAVED_PATH"
@@ -134,76 +124,101 @@ if [ -n "$SAVED_UUID" ] && [ -n "$SAVED_PATH" ]; then
 else
     UUID=$(/usr/local/bin/xray uuid)
     XHTTP_PATH="/$(openssl rand -hex 6)"
+    printf "%s" "$UUID" > "$UUID_FILE"
+    printf "%s" "$XHTTP_PATH" > "$PATH_FILE"
+    echo "✅ 已首次生成并固定写入 UUID 与 Path。"
 fi
 RAND_STR=$(echo "$XHTTP_PATH" | sed 's/^\///')
 ENCODED_PATH="%2F${RAND_STR}"
 
-# 4.2 选择隧道模式（固定隧道 vs 临时隧道）
+# ---------------- 4.2 隧道模式 ----------------
+DEFAULT_MODE="${SAVED_MODE:-1}"
 echo ""
 echo "请选择 Cloudflare Argo 隧道模式："
-echo "  [1] 固定隧道 (推荐，绑定自有域名，支持 Token 或 fscarmen JSON)"
+echo "  [1] 固定隧道 (绑定自有域名，支持 Token 或 fscarmen JSON)"
 echo "  [2] 临时隧道 (免账号免域名，自动申请 trycloudflare.com 临时域名)"
-printf "请输入序号 [1-2] (默认 1): "
-read -r TUNNEL_MODE < /dev/tty
-TUNNEL_MODE="${TUNNEL_MODE:-1}"
+printf "请输入序号 [1-2] (直接回车沿用默认 [${DEFAULT_MODE}]): "
+read -r INPUT_MODE < /dev/tty
+TUNNEL_MODE="${INPUT_MODE:-$DEFAULT_MODE}"
+printf "%s" "$TUNNEL_MODE" > "$MODE_FILE"
 
+# ---------------- 4.3 固定隧道域名与 Token ----------------
 if [ "$TUNNEL_MODE" = "1" ]; then
     echo "--------------------------------------------------"
-    echo "💡 固定隧道说明：请填写「Argo 固定隧道域名」与「Argo 隧道 Token」；"
+    echo "💡 固定隧道说明：请填写上方「Argo 固定隧道域名」与「Argo 隧道 Token」；"
     echo "   自有 CF Tunnel 可在 fscarmen CF Json 生成网："
     echo "   https://fscarmen.cloudflare.now.cc/ 获取 JSON Token（仅选了 Argo 协议才需要），"
     echo "   也可手动去 CF Zero Trust 隧道后台添加（回源填 http://127.0.0.1:8080）。"
     echo "--------------------------------------------------"
 
+    # 固定域名读取与写入
     if [ -n "$SAVED_DOMAIN" ]; then
-        echo "✅ 检测到已有固定隧道域名: ${SAVED_DOMAIN}"
+        echo "✅ 已锁定固定隧道域名: ${SAVED_DOMAIN}"
         printf "直接回车沿用 [${SAVED_DOMAIN}]，或输入新域名覆盖: "
         read -r INPUT_DOMAIN < /dev/tty
-        CF_DOMAIN="${INPUT_DOMAIN:-$SAVED_DOMAIN}"
+        if [ -n "$INPUT_DOMAIN" ]; then
+            CF_DOMAIN="$INPUT_DOMAIN"
+            printf "%s" "$CF_DOMAIN" > "$DOMAIN_FILE"
+            echo "🔄 固定隧道域名已更新并写入 ${DOMAIN_FILE}"
+        else
+            CF_DOMAIN="$SAVED_DOMAIN"
+        fi
     else
-        printf "请输入 Argo 固定隧道域名 (例如 tunnel.example.com): "
-        read -r CF_DOMAIN < /dev/tty
-        [ -z "$CF_DOMAIN" ] && { echo "❌ 错误：固定隧道域名不能为空！"; exit 1; }
+        while [ -z "$CF_DOMAIN" ]; do
+            printf "请输入 Argo 固定隧道域名 (例如 tunnel.example.com): "
+            read -r CF_DOMAIN < /dev/tty
+        done
+        printf "%s" "$CF_DOMAIN" > "$DOMAIN_FILE"
+        echo "✅ 固定隧道域名已永久写入 ${DOMAIN_FILE}"
     fi
 
+    # 固定 Token 读取与写入
     if [ -n "$SAVED_TOKEN" ]; then
-        # 显示前 25 个字符方便核对
-        TOK_PREVIEW=$(echo "$SAVED_TOKEN" | cut -c 1-25)
-        echo "✅ 检测到已有隧道凭证: ${TOK_PREVIEW}..."
+        TOK_PREVIEW=$(echo "$SAVED_TOKEN" | cut -c 1-28)
+        echo "✅ 已锁定隧道凭证 (Token/JSON): ${TOK_PREVIEW}..."
         printf "直接回车沿用现有凭证，或粘贴新 Token / JSON 覆盖: "
         read -r INPUT_TOKEN < /dev/tty
-        CF_TOKEN="${INPUT_TOKEN:-$SAVED_TOKEN}"
+        if [ -n "$INPUT_TOKEN" ]; then
+            CF_TOKEN="$INPUT_TOKEN"
+            printf "%s" "$CF_TOKEN" > "$TOKEN_FILE"
+            echo "🔄 隧道凭证已更新并写入 ${TOKEN_FILE}"
+        else
+            CF_TOKEN="$SAVED_TOKEN"
+        fi
     else
-        printf "请输入 Argo 隧道 Token (eyJh...) 或 fscarmen 生成的 JSON: "
-        read -r CF_TOKEN < /dev/tty
-        [ -z "$CF_TOKEN" ] && { echo "❌ 错误：隧道凭证不能为空！"; exit 1; }
+        while [ -z "$CF_TOKEN" ]; do
+            printf "请输入 Argo 隧道 Token (eyJh...) 或 fscarmen 生成的 JSON: "
+            read -r CF_TOKEN < /dev/tty
+        done
+        printf "%s" "$CF_TOKEN" > "$TOKEN_FILE"
+        echo "✅ 隧道凭证已永久写入 ${TOKEN_FILE}"
     fi
 
-    # 判断用户输入的是 fscarmen 的 JSON 还是官方 eyJh Token
+    # 判断 JSON 凭证还是官方 eyJh Token
     if echo "$CF_TOKEN" | grep -q '{'; then
-        echo "🔧 检测到 JSON 格式凭证，正在生成本地 tunnel.json 与 config.yml..."
-        echo "$CF_TOKEN" > "${CONF_DIR}/tunnel.json"
+        echo "🔧 检测到 JSON 格式凭证，正在生成 ${PERSIST_DIR}/tunnel.json 与 config.yml..."
+        printf "%s" "$CF_TOKEN" > "${PERSIST_DIR}/tunnel.json"
         TUNNEL_ID=$(echo "$CF_TOKEN" | grep -oE '"TunnelID":[[:space:]]*"[^"]+"' | sed -E 's/.*"([^"]+)"/\1/')
-        cat << YAML > "${CONF_DIR}/config.yml"
+        cat << YAML > "${PERSIST_DIR}/config.yml"
 tunnel: ${TUNNEL_ID}
-credentials-file: ${CONF_DIR}/tunnel.json
+credentials-file: ${PERSIST_DIR}/tunnel.json
 protocol: http2
 ingress:
   - hostname: ${CF_DOMAIN}
     service: http://127.0.0.1:8080
   - service: http_status:404
 YAML
-        CF_RUN_ARGS="tunnel --no-autoupdate --ha-connections 1 --config ${CONF_DIR}/config.yml run"
+        CF_RUN_ARGS="tunnel --no-autoupdate --ha-connections 1 --config ${PERSIST_DIR}/config.yml run"
     else
         CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 run --token ${CF_TOKEN}"
     fi
 else
-    echo "⚡ 已选择【临时隧道】，无需输入 Token 与域名，稍后将自动提取分配的域名..."
+    echo "⚡ 已选择【临时隧道】，无需 Token 与固定域名，稍后自动提取分配域名..."
     rm -f /var/log/cloudflared.log
     CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --url http://127.0.0.1:8080 --logfile /var/log/cloudflared.log"
 fi
 
-# 4.3 选择优选域名或 IP
+# ---------------- 4.4 优选域名读取与写入 ----------------
 echo ""
 echo "请选择优选域名 / 客户端连接地址："
 echo "  [0] 不优选，直接使用隧道域名本身"
@@ -214,13 +229,15 @@ echo "  [4] visa.com.sg"
 echo "  [5] time.is"
 echo "  [6] 手动输入自定义优选域名或优选 IP"
 if [ -n "$SAVED_ADDR" ]; then
-    echo "  [回车] 沿用上次优选地址 (${SAVED_ADDR})"
+    echo "  [回车] 沿用已固定的优选地址 (${SAVED_ADDR})"
+else
+    echo "  [回车] 默认使用 [1] cloudflare.182682.xyz"
 fi
 printf "请输入序号 [0-6]: "
 read -r OPT_CHOICE < /dev/tty
 
 case "$OPT_CHOICE" in
-    0) ADDR="" ;;
+    0) ADDR="$CF_DOMAIN" ;;
     1) ADDR="cloudflare.182682.xyz" ;;
     2) ADDR="cf.090227.xyz" ;;
     3) ADDR="icook.hk" ;;
@@ -229,25 +246,20 @@ case "$OPT_CHOICE" in
     6)
         printf "请输入你的自定义优选域名或 IP: "
         read -r CUSTOM_ADDR < /dev/tty
-        ADDR="$CUSTOM_ADDR"
+        ADDR="${CUSTOM_ADDR:-$CF_DOMAIN}"
         ;;
     *)
-        ADDR="${SAVED_ADDR:-}"
+        if [ -n "$SAVED_ADDR" ]; then
+            ADDR="$SAVED_ADDR"
+        else
+            ADDR="cloudflare.182682.xyz"
+        fi
         ;;
 esac
-
-# 立即保存状态（防止后续服务重启波动导致配置未保存）
-cat << STATE > "$STATE_FILE"
-SAVED_UUID="${UUID}"
-SAVED_PATH="${XHTTP_PATH}"
-SAVED_DOMAIN="${CF_DOMAIN}"
-SAVED_ADDR="${ADDR}"
-STATE
-[ -n "$CF_TOKEN" ] && printf "%s" "$CF_TOKEN" > "$TOKEN_FILE"
-chmod 600 "$STATE_FILE" "$TOKEN_FILE" 2>/dev/null || true
+printf "%s" "$ADDR" > "$ADDR_FILE"
 
 echo "=== 5. 写入 Xray 本地回环配置（仅监听 127.0.0.1:8080）==="
-cat << JSON > "${CONF_DIR}/config.json"
+cat << JSON > "${XRAY_CONF_DIR}/config.json"
 {
   "log": {
     "loglevel": "warning"
@@ -322,7 +334,6 @@ depend() { need net; }
 OPENRC_XRAY
     chmod +x /etc/init.d/xray
 
-    # 移除 need xray 避免 OpenRC 连带重启引发 flock 资源锁冲突
     cat << OPENRC_CF > /etc/init.d/cloudflared
 #!/sbin/openrc-run
 name="cloudflared"
@@ -386,7 +397,6 @@ SYS_CF
     systemctl restart cloudflared
 fi
 
-# 若为临时隧道，等待提取 trycloudflare.com 域名
 if [ "$TUNNEL_MODE" = "2" ]; then
     echo "⏳ 正在等待 Cloudflare 分配临时隧道域名 (约 3~8 秒)..."
     CF_DOMAIN=""
@@ -403,15 +413,18 @@ if [ "$TUNNEL_MODE" = "2" ]; then
     else
         echo "✅ 成功获取临时隧道域名: ${CF_DOMAIN}"
     fi
+    [ "$OPT_CHOICE" = "0" ] && ADDR="$CF_DOMAIN"
 fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=none&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2%2Chttp%2F1.1&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up#Argo-XHTTP-${CF_DOMAIN}"
+printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
 
 echo ""
 echo "=================================================="
 echo "✅ argo-xhttp-Pure 部署完成！"
 echo "=================================================="
+echo "固定配置目录     : /etc/argo-xhttp/"
 echo "隧道类型         : $([ "$TUNNEL_MODE" = "1" ] && echo "固定隧道" || echo "临时隧道 (重启会变)")"
 echo "本地回源地址     : http://127.0.0.1:8080"
 echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
@@ -425,7 +438,8 @@ echo ""
 echo "${VLESS_LINK}"
 echo ""
 echo "=================================================="
+echo "💡 随时查看当前节点链接命令: cat /etc/argo-xhttp/vless.link"
 if [ "$TUNNEL_MODE" = "1" ] && ! echo "$CF_TOKEN" | grep -q '{'; then
     echo "⚠️ 提醒：使用官方 eyJh Token 时，请确保 CF 后台 Public Hostname 指向 http://127.0.0.1:8080"
-    echo "=================================================="
 fi
+echo "=================================================="
