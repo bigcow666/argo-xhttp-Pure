@@ -220,9 +220,9 @@ echo "请选择优选域名 / 客户端连接地址："
 echo "  [0] 不优选，直接使用隧道域名本身"
 echo "  [1] cloudflare.182682.xyz (推荐)"
 echo "  [2] cf.090227.xyz"
-echo "  [3] icook.hk"
-echo "  [4] visa.com.sg"
-echo "  [5] time.is"
+echo "  [3] saas.sin.fan"
+echo "  [4] cf.0sm.com"
+echo "  [5] freeyx.cloudflare88.eu.org"
 echo "  [6] 手动输入自定义优选域名或优选 IP"
 if [ -f "$ADDR_FILE" ]; then
     echo "  [回车] 沿用已固定的优选设置 (${SAVED_ADDR:-不优选/跟随隧道域名})"
@@ -236,9 +236,9 @@ case "$OPT_CHOICE" in
     0) ADDR="" ;;
     1) ADDR="cloudflare.182682.xyz" ;;
     2) ADDR="cf.090227.xyz" ;;
-    3) ADDR="icook.hk" ;;
-    4) ADDR="visa.com.sg" ;;
-    5) ADDR="time.is" ;;
+    3) ADDR="saas.sin.fan" ;;
+    4) ADDR="cf.0sm.com" ;;
+    5) ADDR="freeyx.cloudflare88.eu.org" ;;
     6)
         printf "请输入你的自定义优选域名或 IP: "
         read -r CUSTOM_ADDR < /dev/tty
