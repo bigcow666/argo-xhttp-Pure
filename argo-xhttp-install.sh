@@ -14,9 +14,14 @@ TOKEN_FILE="${PERSIST_DIR}/token"
 ADDR_FILE="${PERSIST_DIR}/addr"
 LINK_FILE="${PERSIST_DIR}/vless.link"
 
+# 精准检测活跃进程（彻底排除 Z 状态的 <defunct> 僵尸进程干扰）
+is_alive() {
+    ps -eo stat,comm 2>/dev/null | awk -v p="$1" '$1 !~ /Z/ && $2 == p {found=1} END {exit !found}'
+}
+
 echo "=================================================="
 echo "   argo-xhttp-Pure (VLESS+XHTTP + Cloudflare Argo)"
-echo "   内存固化: Xray(35MiB) / Cloudflare(30MiB) + 32K切片"
+echo "   内存固化: Xray(45MiB) / Cloudflare(45MiB) + 128K切片"
 echo "=================================================="
 
 echo "=== 1. 检查系统环境与架构 ==="
@@ -26,6 +31,7 @@ case "$ARCH" in
     aarch64|arm64) XRAY_ARCH="arm64-v8a"; CF_ARCH="arm64" ;;
     armv7l|armv7) XRAY_ARCH="arm32-v7a"; CF_ARCH="arm" ;;
     i386|i686) XRAY_ARCH="32"; CF_ARCH="386" ;;
+    s390x) XRAY_ARCH="s390x"; CF_ARCH="s390x" ;;
     *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
 esac
 
@@ -49,15 +55,17 @@ echo "=== 2. 检查并开启 256MB Swap 虚拟内存（防 OOM）==="
 SWAP_TOTAL=$(free -m 2>/dev/null | awk '/^Swap:/ {print $2}')
 if [ "${SWAP_TOTAL:-0}" -eq 0 ]; then
     if [ ! -f /swapfile ]; then
-        dd if=/dev/zero of=/swapfile bs=1M count=256 status=none 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=256
-        chmod 600 /swapfile
-        mkswap /swapfile >/dev/null 2>&1 || true
-        if swapon /swapfile >/dev/null 2>&1; then
-            grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
-            echo "✅ 已开启 256MB Swap 兜底。"
-        else
-            rm -f /swapfile
-            echo "ℹ️ 当前容器环境限制挂载 Swap，已自动跳过（不影响运行）。"
+        dd if=/dev/zero of=/swapfile bs=1M count=256 status=none 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=256 2>/dev/null || true
+        if [ -f /swapfile ]; then
+            chmod 600 /swapfile
+            mkswap /swapfile >/dev/null 2>&1 || true
+            if swapon /swapfile >/dev/null 2>&1; then
+                grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+                echo "✅ 已开启 256MB Swap 兜底。"
+            else
+                rm -f /swapfile
+                echo "ℹ️ 当前容器环境限制挂载 Swap，已自动跳过（不影响运行）。"
+            fi
         fi
     fi
 fi
@@ -206,12 +214,12 @@ ingress:
 YAML
         CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --config ${PERSIST_DIR}/config.yml run"
     else
-        rm -f "${PERSIST_DIR}/config.yml"
+        rm -f "${PERSIST_DIR}/config.yml" "${PERSIST_DIR}/tunnel.json"
         CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 run --token ${CF_TOKEN}"
     fi
 else
     echo "⚡ 已选择【临时隧道】..."
-    rm -f /var/log/cloudflared.log "${PERSIST_DIR}/config.yml"
+    rm -f /var/log/cloudflared.log "${PERSIST_DIR}/config.yml" "${PERSIST_DIR}/tunnel.json"
     CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --url http://127.0.0.1:8080 --logfile /var/log/cloudflared.log"
 fi
 
@@ -246,7 +254,7 @@ case "$OPT_CHOICE" in
 esac
 printf "%s" "$ADDR" > "$ADDR_FILE"
 
-echo "=== 5. 写入优化后的 Xray 本地回环配置 (集成 32KB 切片与静默过滤) ==="
+echo "=== 5. 写入优化后的 Xray 本地回环配置 (集成 128KB 切片与静默过滤) ==="
 cat << JSON > "${XRAY_CONF_DIR}/config.json"
 {
   "log": {
@@ -270,7 +278,7 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
         "xhttpSettings": {
           "path": "${XHTTP_PATH}",
           "mode": "packet-up",
-          "scMaxEachPostBytes": 32768,
+          "scMaxEachPostBytes": 131072,
           "scMaxBufferedPosts": 30
         },
         "security": "none",
@@ -313,25 +321,9 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
 }
 JSON
 
-echo "=== 6. 彻底物理清场旧进程并启动守护服务 (35M/30M + 强力GC回收) ==="
+echo "=== 6. 彻底物理清场旧进程并启动服务 (45M/45M + GOGC=50) ==="
 
-# 生成统一原生启动/守护脚本 (供 crontab 保活或容器直接调用)
-cat << EOF > "${PERSIST_DIR}/keepalive.sh"
-#!/bin/sh
-if ! pgrep -x "xray" >/dev/null 2>&1; then
-    export GOMEMLIMIT=35MiB
-    export GOGC=20
-    nohup /usr/local/bin/xray run -c ${XRAY_CONF_DIR}/config.json >/dev/null 2>&1 &
-fi
-if ! pgrep -x "cloudflared" >/dev/null 2>&1; then
-    export GOMEMLIMIT=30MiB
-    export GOGC=20
-    nohup ${CF_BIN} ${CF_RUN_ARGS} >/dev/null 2>&1 &
-fi
-EOF
-chmod +x "${PERSIST_DIR}/keepalive.sh"
-
-# 先彻底清理旧进程与状态锁
+# 6.1 清理旧服务与状态锁
 if command -v rc-service >/dev/null 2>&1; then
     mkdir -p /run/openrc
     touch /run/openrc/softlevel
@@ -346,9 +338,8 @@ fi
 killall -9 cloudflared xray >/dev/null 2>&1 || true
 rm -f /run/xray.pid /run/cloudflared.pid /run/openrc/started/xray /run/openrc/started/cloudflared
 
-# 按系统环境配置服务
+# 6.2 写入系统服务配置并尝试启动
 if [ "$OS" = "alpine" ] && command -v rc-service >/dev/null 2>&1; then
-    # 修复：确保 /run/openrc/softlevel 存在，解决容器内 OpenRC 拒绝启动问题
     mkdir -p /run/openrc
     touch /run/openrc/softlevel
 
@@ -361,8 +352,8 @@ command_background="yes"
 pidfile="/run/xray.pid"
 rc_ulimit="-n 65535"
 
-export GOMEMLIMIT=35MiB
-export GOGC=20
+export GOMEMLIMIT=45MiB
+export GOGC=50
 
 depend() { need net; }
 
@@ -373,7 +364,7 @@ stop_pre() {
 OPENRC_XRAY
     chmod +x /etc/init.d/xray
 
-    # 修复：去掉 EOF 单引号以正确展开 ${CF_BIN} 与 ${CF_RUN_ARGS}
+    # 不加单引号，确保 ${CF_BIN} 与 ${CF_RUN_ARGS} 真实展开写入
     cat << OPENRC_CF > /etc/init.d/cloudflared
 #!/sbin/openrc-run
 name="cloudflared"
@@ -383,8 +374,8 @@ command_background="yes"
 pidfile="/run/cloudflared.pid"
 rc_ulimit="-n 65535"
 
-export GOMEMLIMIT=30MiB
-export GOGC=20
+export GOMEMLIMIT=45MiB
+export GOGC=50
 
 depend() { need net; }
 
@@ -410,8 +401,8 @@ After=network.target
 [Service]
 Type=simple
 LimitNOFILE=65535
-Environment="GOMEMLIMIT=35MiB"
-Environment="GOGC=20"
+Environment="GOMEMLIMIT=45MiB"
+Environment="GOGC=50"
 ExecStart=/usr/local/bin/xray run -c /usr/local/etc/xray/config.json
 Restart=on-failure
 RestartSec=3
@@ -420,7 +411,6 @@ RestartSec=3
 WantedBy=multi-user.target
 SYS_XRAY
 
-    # 修复：去掉 EOF 单引号以正确展开 ${CF_BIN} 与 ${CF_RUN_ARGS}
     cat << SYS_CF > /etc/systemd/system/cloudflared.service
 [Unit]
 Description=Cloudflare Argo Tunnel (Lite Single-Connection)
@@ -429,8 +419,8 @@ After=network.target
 [Service]
 Type=simple
 LimitNOFILE=65535
-Environment="GOMEMLIMIT=30MiB"
-Environment="GOGC=20"
+Environment="GOMEMLIMIT=45MiB"
+Environment="GOGC=50"
 ExecStart=${CF_BIN} ${CF_RUN_ARGS}
 Restart=on-failure
 RestartSec=5
@@ -446,22 +436,18 @@ SYS_CF
     systemctl start cloudflared >/dev/null 2>&1 || true
 fi
 
-# 终极兜底验证：如果 OpenRC/Systemd 因容器权限限制未能拉起进程，自动无缝调用原生 nohup 启动
+# 6.3 容器环境直接兜底拉起（过滤 Z 僵尸进程，若 OpenRC/Systemd 未拉起则直接 nohup 后台启动）
 sleep 2
-if ! pgrep -x "xray" >/dev/null 2>&1 || ! pgrep -x "cloudflared" >/dev/null 2>&1; then
-    echo "⚡ 检测到容器环境限制服务管理器，正在启用 nohup 原生后台模式启动..."
-    sh "${PERSIST_DIR}/keepalive.sh"
-    sleep 2
+if ! is_alive "xray"; then
+    GOMEMLIMIT=45MiB GOGC=50 nohup /usr/local/bin/xray run -c "${XRAY_CONF_DIR}/config.json" >/dev/null 2>&1 &
+fi
+if ! is_alive "cloudflared"; then
+    GOMEMLIMIT=45MiB GOGC=50 nohup ${CF_BIN} ${CF_RUN_ARGS} >/dev/null 2>&1 &
 fi
 
-# 写入 Crontab 定时巡检自启（每分钟检查一次，进程死掉自动拉起，兼容所有系统）
-if command -v crontab >/dev/null 2>&1; then
-    (crontab -l 2>/dev/null | grep -v "${PERSIST_DIR}/keepalive.sh"; echo "* * * * * ${PERSIST_DIR}/keepalive.sh >/dev/null 2>&1") | crontab - 2>/dev/null || true
-fi
-
-# 打印当前双进程存活状态
-if pgrep -x "xray" >/dev/null 2>&1 && pgrep -x "cloudflared" >/dev/null 2>&1; then
-    echo "✅ Xray 与 cloudflared 进程均已成功启动并运行！"
+sleep 2
+if is_alive "xray" && is_alive "cloudflared"; then
+    echo "✅ Xray 与 cloudflared 均已成功启动并运行！"
 else
     echo "⚠️ 警告：部分进程未能正常启动，请执行 ps aux 检查！"
 fi
@@ -480,28 +466,27 @@ if [ "$TUNNEL_MODE" = "2" ]; then
 fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
-# 自动带上 32KB 切片与多路复用优化的 extra 参数，导入即生效
-EXTRA_PARAM="&extra=%7B%22scMaxEachPostBytes%22%3A32768%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%224-8%22%2C%22cMaxReuseTimes%22%3A%2232-64%22%7D%7D"
+# 原生自带 128KB (131072) 切片与多路复用优化的 extra 参数
+EXTRA_PARAM="&extra=%7B%22scMaxEachPostBytes%22%3A131072%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%224-8%22%2C%22cMaxReuseTimes%22%3A%2232-64%22%7D%7D"
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=none&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
 
 echo ""
 echo "=================================================="
-echo "✅ argo-xhttp-Pure 最终版部署完成！"
+echo "✅ argo-xhttp-Pure (128KB 高吞吐版) 部署完成！"
 echo "=================================================="
 echo "固定配置目录     : /etc/argo-xhttp/"
-echo "内存与GC策略     : Xray(35M) / Cloudflare(30M), GOGC=20"
-echo "上行分片大小     : 32KB 切片 (完美适配手机与小内存容器)"
+echo "内存与GC策略     : Xray(45M) / Cloudflare(45M), GOGC=50"
+echo "上行分片大小     : 128KB (131072 Bytes) 高速切片"
 echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
 echo "连接地址 (优选)  : ${FINAL_ADDR}"
 echo "UUID             : ${UUID}"
 echo "Path             : ${XHTTP_PATH}"
 echo "=================================================="
-echo "📋 复制下方节点链接（自带 extra 优化参数），在 v2rayNG 中导入："
+echo "📋 复制下方节点链接（自带 128KB extra 优化参数），在客户端中导入："
 echo ""
 echo "${VLESS_LINK}"
 echo ""
 echo "=================================================="
 echo "💡 查看当前完整节点链接命令: cat /etc/argo-xhttp/vless.link"
-echo "💡 手动重启/拉起双进程命令: sh /etc/argo-xhttp/keepalive.sh"
 echo "=================================================="
