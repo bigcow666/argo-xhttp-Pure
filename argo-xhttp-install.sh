@@ -2,8 +2,8 @@
 set -e
 
 echo "=================================================="
-echo "   Xray (VLESS+XHTTP) + Cloudflare Argo 极简版"
-echo "   专为 128MB 内存 VPS 优化 | 本地回环 8080 零端口"
+echo "   argo-xhttp-Pure (VLESS+XHTTP + Cloudflare Argo)"
+echo "   专为 128MB 极限内存 VPS 优化 | 本地回环 8080 零端口"
 echo "=================================================="
 
 echo "=== 1. 检查系统环境与架构 ==="
@@ -11,7 +11,7 @@ ARCH=$(uname -m)
 case "$ARCH" in
     x86_64|amd64) XRAY_ARCH="64"; CF_ARCH="amd64" ;;
     aarch64|arm64) XRAY_ARCH="arm64-v8a"; CF_ARCH="arm64" ;;
-    *) echo "不支持的架构: $ARCH"; exit 1 ;;
+    *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
 esac
 
 if command -v apk >/dev/null 2>&1; then
@@ -21,7 +21,7 @@ elif command -v apt-get >/dev/null 2>&1; then
     OS="debian"
     apt-get update && apt-get install -y curl unzip ca-certificates openssl
 else
-    echo "仅支持 Alpine 或 Debian/Ubuntu 系统"; exit 1
+    echo "❌ 仅支持 Alpine 或 Debian/Ubuntu 系统"; exit 1
 fi
 
 echo "=== 2. 检查并开启 256MB Swap 虚拟内存（防 128MB OOM）==="
@@ -76,18 +76,18 @@ echo ""
 echo "请选择优选域名 / 连接地址（直接回车默认使用隧道域名本身）："
 echo "  [0] 不优选，直接使用隧道域名 (${CF_DOMAIN})"
 echo "  [1] cloudflare.182682.xyz"
-echo "  [2] saas.sin.fan"
-echo "  [3] cf.090227.xyz"
-echo "  [4] cf.0sm.com"
+echo "  [2] icook.hk"
+echo "  [3] visa.com.sg"
+echo "  [4] time.is"
 echo "  [5] 手动输入自定义优选域名或优选 IP"
 printf "请输入序号 [0-5] (默认 0): "
 read -r OPT_CHOICE < /dev/tty
 
 case "$OPT_CHOICE" in
     1) ADDR="cloudflare.182682.xyz" ;;
-    2) ADDR="saas.sin.fan" ;;
-    3) ADDR="cf.090227.xyz" ;;
-    4) ADDR="cf.0sm.com" ;;
+    2) ADDR="icook.hk" ;;
+    3) ADDR="visa.com.sg" ;;
+    4) ADDR="time.is" ;;
     5)
         printf "请输入你的自定义优选域名或 IP: "
         read -r CUSTOM_ADDR < /dev/tty
@@ -261,15 +261,18 @@ VLESS_LINK="vless://${UUID}@${ADDR}:443?encryption=none&security=tls&sni=${CF_DO
 
 echo ""
 echo "=================================================="
-echo "✅ Xray + Argo 零端口联合部署完成！"
+echo "✅ argo-xhttp-Pure 部署完成！"
 echo "=================================================="
 echo "本地回源地址     : http://127.0.0.1:8080"
 echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
 echo "连接地址 (优选)  : ${ADDR}"
 echo "uTLS 浏览器指纹  : chrome"
 echo "=================================================="
-echo "📋 复制下方节点链接，直接在 v2rayNG 中【从剪贴板导入】：\n"
+echo "📋 复制下方节点链接，直接在 v2rayNG 中【从剪贴板导入】："
+echo ""
 echo "${VLESS_LINK}"
-echo "\n=================================================="
+echo ""
+echo "=================================================="
 echo "⚠️ 提醒：请确保 Cloudflare 隧道后台 Public Hostname 指向 http://127.0.0.1:8080"
+echo "💡 后续重跑管理命令：sh /root/argo-xhttp-install.sh"
 echo "=================================================="
