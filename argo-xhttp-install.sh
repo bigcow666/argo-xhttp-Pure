@@ -24,28 +24,41 @@ ARCH=$(uname -m)
 case "$ARCH" in
     x86_64|amd64) XRAY_ARCH="64"; CF_ARCH="amd64" ;;
     aarch64|arm64) XRAY_ARCH="arm64-v8a"; CF_ARCH="arm64" ;;
+    armv7l|armv7) XRAY_ARCH="arm32-v7a"; CF_ARCH="arm" ;;
+    i386|i686) XRAY_ARCH="32"; CF_ARCH="386" ;;
     *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
 esac
 
 if command -v apk >/dev/null 2>&1; then
     OS="alpine"
-    apk update && apk add --no-cache curl unzip ca-certificates openssl grep sed psmisc
+    apk update && apk add --no-cache curl unzip ca-certificates openssl grep sed psmisc procps
 elif command -v apt-get >/dev/null 2>&1; then
     OS="debian"
-    apt-get update && apt-get install -y curl unzip ca-certificates openssl grep sed psmisc
+    apt-get update && apt-get install -y curl unzip ca-certificates openssl grep sed psmisc procps
+elif command -v dnf >/dev/null 2>&1; then
+    OS="rhel"
+    dnf install -y curl unzip ca-certificates openssl grep sed psmisc procps-ng
+elif command -v yum >/dev/null 2>&1; then
+    OS="rhel"
+    yum install -y curl unzip ca-certificates openssl grep sed psmisc procps-ng
 else
-    echo "❌ 仅支持 Alpine 或 Debian/Ubuntu 系统"; exit 1
+    echo "❌ 不支持的系统环境，缺少包管理器 (apk/apt/dnf/yum)"; exit 1
 fi
 
 echo "=== 2. 检查并开启 256MB Swap 虚拟内存（防 OOM）==="
-if [ "$(free -m | awk '/^Swap:/ {print $2}')" -eq 0 ]; then
+SWAP_TOTAL=$(free -m 2>/dev/null | awk '/^Swap:/ {print $2}')
+if [ "${SWAP_TOTAL:-0}" -eq 0 ]; then
     if [ ! -f /swapfile ]; then
-        dd if=/dev/zero of=/swapfile bs=1M count=256 status=none
+        dd if=/dev/zero of=/swapfile bs=1M count=256 status=none 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=256
         chmod 600 /swapfile
-        mkswap /swapfile >/dev/null 2>&1
-        swapon /swapfile >/dev/null 2>&1 || true
-        grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
-        echo "✅ 已开启 256MB Swap 兜底。"
+        mkswap /swapfile >/dev/null 2>&1 || true
+        if swapon /swapfile >/dev/null 2>&1; then
+            grep -q "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+            echo "✅ 已开启 256MB Swap 兜底。"
+        else
+            rm -f /swapfile
+            echo "ℹ️ 当前容器环境限制挂载 Swap，已自动跳过（不影响运行）。"
+        fi
     fi
 fi
 
@@ -193,11 +206,12 @@ ingress:
 YAML
         CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --config ${PERSIST_DIR}/config.yml run"
     else
+        rm -f "${PERSIST_DIR}/config.yml"
         CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 run --token ${CF_TOKEN}"
     fi
 else
     echo "⚡ 已选择【临时隧道】..."
-    rm -f /var/log/cloudflared.log
+    rm -f /var/log/cloudflared.log "${PERSIST_DIR}/config.yml"
     CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --url http://127.0.0.1:8080 --logfile /var/log/cloudflared.log"
 fi
 
@@ -300,11 +314,43 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
 JSON
 
 echo "=== 6. 彻底物理清场旧进程并启动守护服务 (35M/30M + 强力GC回收) ==="
-if [ "$OS" = "alpine" ]; then
+
+# 生成统一原生启动/守护脚本 (供 crontab 保活或容器直接调用)
+cat << EOF > "${PERSIST_DIR}/keepalive.sh"
+#!/bin/sh
+if ! pgrep -x "xray" >/dev/null 2>&1; then
+    export GOMEMLIMIT=35MiB
+    export GOGC=20
+    nohup /usr/local/bin/xray run -c ${XRAY_CONF_DIR}/config.json >/dev/null 2>&1 &
+fi
+if ! pgrep -x "cloudflared" >/dev/null 2>&1; then
+    export GOMEMLIMIT=30MiB
+    export GOGC=20
+    nohup ${CF_BIN} ${CF_RUN_ARGS} >/dev/null 2>&1 &
+fi
+EOF
+chmod +x "${PERSIST_DIR}/keepalive.sh"
+
+# 先彻底清理旧进程与状态锁
+if command -v rc-service >/dev/null 2>&1; then
+    mkdir -p /run/openrc
+    touch /run/openrc/softlevel
     rc-service cloudflared stop >/dev/null 2>&1 || true
     rc-service xray stop >/dev/null 2>&1 || true
-    killall -9 cloudflared xray >/dev/null 2>&1 || true
-    rm -f /run/xray.pid /run/cloudflared.pid
+    rc-service cloudflared zap >/dev/null 2>&1 || true
+    rc-service xray zap >/dev/null 2>&1 || true
+fi
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop cloudflared xray >/dev/null 2>&1 || true
+fi
+killall -9 cloudflared xray >/dev/null 2>&1 || true
+rm -f /run/xray.pid /run/cloudflared.pid /run/openrc/started/xray /run/openrc/started/cloudflared
+
+# 按系统环境配置服务
+if [ "$OS" = "alpine" ] && command -v rc-service >/dev/null 2>&1; then
+    # 修复：确保 /run/openrc/softlevel 存在，解决容器内 OpenRC 拒绝启动问题
+    mkdir -p /run/openrc
+    touch /run/openrc/softlevel
 
     cat << 'OPENRC_XRAY' > /etc/init.d/xray
 #!/sbin/openrc-run
@@ -320,14 +366,15 @@ export GOGC=20
 
 depend() { need net; }
 
-stop_post() {
+stop_pre() {
     killall -9 xray >/dev/null 2>&1 || true
     rm -f /run/xray.pid
 }
 OPENRC_XRAY
     chmod +x /etc/init.d/xray
 
-    cat << 'OPENRC_CF' > /etc/init.d/cloudflared
+    # 修复：去掉 EOF 单引号以正确展开 ${CF_BIN} 与 ${CF_RUN_ARGS}
+    cat << OPENRC_CF > /etc/init.d/cloudflared
 #!/sbin/openrc-run
 name="cloudflared"
 command="${CF_BIN}"
@@ -341,7 +388,7 @@ export GOGC=20
 
 depend() { need net; }
 
-stop_post() {
+stop_pre() {
     killall -9 cloudflared >/dev/null 2>&1 || true
     rm -f /run/cloudflared.pid
 }
@@ -350,14 +397,11 @@ OPENRC_CF
 
     rc-update add xray default >/dev/null 2>&1 || true
     rc-update add cloudflared default >/dev/null 2>&1 || true
+    rc-service xray start >/dev/null 2>&1 || true
     sleep 1
-    rc-service xray start
-    sleep 1
-    rc-service cloudflared start
-else
-    systemctl stop cloudflared xray >/dev/null 2>&1 || true
-    killall -9 cloudflared xray >/dev/null 2>&1 || true
+    rc-service cloudflared start >/dev/null 2>&1 || true
 
+elif command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     cat << 'SYS_XRAY' > /etc/systemd/system/xray.service
 [Unit]
 Description=Xray Local Loopback Service
@@ -376,7 +420,8 @@ RestartSec=3
 WantedBy=multi-user.target
 SYS_XRAY
 
-    cat << 'SYS_CF' > /etc/systemd/system/cloudflared.service
+    # 修复：去掉 EOF 单引号以正确展开 ${CF_BIN} 与 ${CF_RUN_ARGS}
+    cat << SYS_CF > /etc/systemd/system/cloudflared.service
 [Unit]
 Description=Cloudflare Argo Tunnel (Lite Single-Connection)
 After=network.target
@@ -396,9 +441,29 @@ SYS_CF
 
     systemctl daemon-reload
     systemctl enable xray cloudflared >/dev/null 2>&1 || true
-    systemctl start xray
+    systemctl start xray >/dev/null 2>&1 || true
     sleep 1
-    systemctl start cloudflared
+    systemctl start cloudflared >/dev/null 2>&1 || true
+fi
+
+# 终极兜底验证：如果 OpenRC/Systemd 因容器权限限制未能拉起进程，自动无缝调用原生 nohup 启动
+sleep 2
+if ! pgrep -x "xray" >/dev/null 2>&1 || ! pgrep -x "cloudflared" >/dev/null 2>&1; then
+    echo "⚡ 检测到容器环境限制服务管理器，正在启用 nohup 原生后台模式启动..."
+    sh "${PERSIST_DIR}/keepalive.sh"
+    sleep 2
+fi
+
+# 写入 Crontab 定时巡检自启（每分钟检查一次，进程死掉自动拉起，兼容所有系统）
+if command -v crontab >/dev/null 2>&1; then
+    (crontab -l 2>/dev/null | grep -v "${PERSIST_DIR}/keepalive.sh"; echo "* * * * * ${PERSIST_DIR}/keepalive.sh >/dev/null 2>&1") | crontab - 2>/dev/null || true
+fi
+
+# 打印当前双进程存活状态
+if pgrep -x "xray" >/dev/null 2>&1 && pgrep -x "cloudflared" >/dev/null 2>&1; then
+    echo "✅ Xray 与 cloudflared 进程均已成功启动并运行！"
+else
+    echo "⚠️ 警告：部分进程未能正常启动，请执行 ps aux 检查！"
 fi
 
 if [ "$TUNNEL_MODE" = "2" ]; then
@@ -438,4 +503,5 @@ echo "${VLESS_LINK}"
 echo ""
 echo "=================================================="
 echo "💡 查看当前完整节点链接命令: cat /etc/argo-xhttp/vless.link"
+echo "💡 手动重启/拉起双进程命令: sh /etc/argo-xhttp/keepalive.sh"
 echo "=================================================="
