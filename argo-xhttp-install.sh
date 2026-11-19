@@ -20,7 +20,7 @@ is_alive() {
 }
 
 echo "=================================================="
-echo "   argo-xhttp-Pure (VLESS+XHTTP + Cloudflare Argo)"
+echo "   argo-xhttp-Pure (VLESS+XHTTP + Cloudflare Argo QUIC)"
 echo "   内存固化: Xray(35MiB) / Cloudflare(30MiB) 无切片版"
 echo "=================================================="
 
@@ -206,21 +206,21 @@ if [ "$TUNNEL_MODE" = "1" ]; then
         cat << YAML > "${PERSIST_DIR}/config.yml"
 tunnel: ${TUNNEL_ID}
 credentials-file: ${PERSIST_DIR}/tunnel.json
-protocol: http2
+protocol: quic
 ingress:
   - hostname: ${CF_DOMAIN}
     service: http://127.0.0.1:8080
   - service: http_status:404
 YAML
-        CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --config ${PERSIST_DIR}/config.yml run"
+        CF_RUN_ARGS="tunnel --no-autoupdate --protocol quic --ha-connections 1 --config ${PERSIST_DIR}/config.yml run"
     else
         rm -f "${PERSIST_DIR}/config.yml" "${PERSIST_DIR}/tunnel.json"
-        CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 run --token ${CF_TOKEN}"
+        CF_RUN_ARGS="tunnel --no-autoupdate --protocol quic --ha-connections 1 run --token ${CF_TOKEN}"
     fi
 else
     echo "⚡ 已选择【临时隧道】..."
     rm -f /var/log/cloudflared.log "${PERSIST_DIR}/config.yml" "${PERSIST_DIR}/tunnel.json"
-    CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --url http://127.0.0.1:8080 --logfile /var/log/cloudflared.log"
+    CF_RUN_ARGS="tunnel --no-autoupdate --protocol quic --ha-connections 1 --url http://127.0.0.1:8080 --logfile /var/log/cloudflared.log"
 fi
 
 # ---------------- 4.4 优选域名读取与写入 ----------------
