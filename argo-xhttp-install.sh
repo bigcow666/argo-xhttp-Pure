@@ -12,11 +12,33 @@ MODE_FILE="${PERSIST_DIR}/mode"
 DOMAIN_FILE="${PERSIST_DIR}/domain"
 TOKEN_FILE="${PERSIST_DIR}/token"
 ADDR_FILE="${PERSIST_DIR}/addr"
+DEC_FILE="${PERSIST_DIR}/decryption"
+ENC_FILE="${PERSIST_DIR}/encryption"
+FLOW_FILE="${PERSIST_DIR}/flow"
 LINK_FILE="${PERSIST_DIR}/vless.link"
 
 # 精准检测活跃进程（彻底排除 Z 状态的 <defunct> 僵尸进程干扰）
 is_alive() {
     ps -eo stat,comm 2>/dev/null | awk -v p="$1" '$1 !~ /Z/ && $2 == p {found=1} END {exit !found}'
+}
+
+# 生成 VLESS Encryption 密钥对 (参数1: 外观模式 native/xorpub/random)
+gen_vless_enc() {
+    MODE_STYLE="${1:-xorpub}"
+    ENC_RAW=$(/usr/local/bin/xray vlessenc 2>/dev/null || true)
+    if [ -z "$ENC_RAW" ]; then
+        return 1
+    fi
+    # 提取最后一组（Post-Quantum ML-KEM-768）的 decryption 与 encryption
+    RAW_DEC=$(printf "%s\n" "$ENC_RAW" | grep '"decryption":' | tail -n 1 | sed -E 's/.*"decryption":[[:space:]]*"([^"]+)".*/\1/')
+    RAW_ENC=$(printf "%s\n" "$ENC_RAW" | grep '"encryption":' | tail -n 1 | sed -E 's/.*"encryption":[[:space:]]*"([^"]+)".*/\1/')
+    if [ -z "$RAW_DEC" ] || [ -z "$RAW_ENC" ]; then
+        return 1
+    fi
+    # 替换第 2 段外观模式 (native -> xorpub/random/native)
+    XRAY_DECRYPTION=$(printf "%s" "$RAW_DEC" | sed -E "s/^([^.]+)\.[^.]+\./\1.${MODE_STYLE}./")
+    XRAY_ENCRYPTION=$(printf "%s" "$RAW_ENC" | sed -E "s/^([^.]+)\.[^.]+\./\1.${MODE_STYLE}./")
+    return 0
 }
 
 echo "=================================================="
@@ -122,6 +144,9 @@ SAVED_MODE=$(cat "$MODE_FILE" 2>/dev/null || true)
 SAVED_DOMAIN=$(cat "$DOMAIN_FILE" 2>/dev/null || true)
 SAVED_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || true)
 SAVED_ADDR=$(cat "$ADDR_FILE" 2>/dev/null || true)
+SAVED_DEC=$(cat "$DEC_FILE" 2>/dev/null || true)
+SAVED_ENC=$(cat "$ENC_FILE" 2>/dev/null || true)
+SAVED_FLOW=$(cat "$FLOW_FILE" 2>/dev/null || true)
 
 # ---------------- 4.1 UUID 与 Path ----------------
 if [ -n "$SAVED_UUID" ] && [ -n "$SAVED_PATH" ]; then
@@ -254,6 +279,111 @@ case "$OPT_CHOICE" in
 esac
 printf "%s" "$ADDR" > "$ADDR_FILE"
 
+# ---------------- 4.5 VLESS Encryption 与 Flow (可选并持久化) ----------------
+echo ""
+echo "=== 4.5 VLESS Encryption (enc) 与 Flow 配置 ==="
+XRAY_DECRYPTION="none"
+XRAY_ENCRYPTION="none"
+NEED_GEN_ENC="0"
+
+if [ -n "$SAVED_DEC" ] && [ -n "$SAVED_ENC" ] && [ "$SAVED_DEC" != "none" ]; then
+    DEC_PREVIEW=$(printf "%s" "$SAVED_DEC" | cut -c 1-36)
+    echo "✅ 已锁定 VLESS Encryption: ${DEC_PREVIEW}..."
+    echo "  [1] 保留当前加密方式 (默认)"
+    echo "  [2] 重新生成新的 VLESS Encryption 密钥"
+    echo "  [3] 关闭 VLESS Encryption (恢复为 none)"
+    printf "请选择 [1-3] (直接回车保留当前): "
+    read -r ENC_ACTION < /dev/tty
+    case "$ENC_ACTION" in
+        2) NEED_GEN_ENC="1" ;;
+        3)
+            XRAY_DECRYPTION="none"
+            XRAY_ENCRYPTION="none"
+            echo "🔄 已关闭 VLESS Encryption。"
+            ;;
+        *)
+            XRAY_DECRYPTION="$SAVED_DEC"
+            XRAY_ENCRYPTION="$SAVED_ENC"
+            echo "✅ 已沿用现有 VLESS Encryption。"
+            ;;
+    esac
+else
+    echo "当前未启用 VLESS Encryption (none)。是否开启？"
+    echo "  [1] 关闭 (none，默认)"
+    echo "  [2] 开启 VLESS Encryption (支持 xorpub / native / random)"
+    printf "请选择 [1-2] (回车默认 [1]): "
+    read -r ENC_ENABLE_CHOICE < /dev/tty
+    if [ "$ENC_ENABLE_CHOICE" = "2" ]; then
+        NEED_GEN_ENC="1"
+    fi
+fi
+
+if [ "$NEED_GEN_ENC" = "1" ]; then
+    echo "请选择 VLESS Encryption 流量外观模式："
+    echo "  [1] xorpub (推荐，混淆握手公钥)"
+    echo "  [2] native (原始格式)"
+    echo "  [3] random (全随机外观)"
+    printf "请选择 [1-3] (回车默认 [1]): "
+    read -r ENC_STYLE_CHOICE < /dev/tty
+    case "$ENC_STYLE_CHOICE" in
+        2) ENC_STYLE="native" ;;
+        3) ENC_STYLE="random" ;;
+        *) ENC_STYLE="xorpub" ;;
+    esac
+
+    if gen_vless_enc "$ENC_STYLE"; then
+        echo "✅ 已生成 VLESS Encryption (${ENC_STYLE}) 并写入持久化文件。"
+    else
+        echo "⚠️ 当前 Xray 版本不支持 xray vlessenc，已自动回退为 none。"
+        XRAY_DECRYPTION="none"
+        XRAY_ENCRYPTION="none"
+    fi
+fi
+
+printf "%s" "$XRAY_DECRYPTION" > "$DEC_FILE"
+printf "%s" "$XRAY_ENCRYPTION" > "$ENC_FILE"
+
+# Flow 配置（仅在开启 VLESS Encryption 时允许配置 Vision）
+if [ "$XRAY_DECRYPTION" != "none" ]; then
+    if [ -n "$SAVED_FLOW" ]; then
+        echo "✅ 已锁定 Flow 流控: ${SAVED_FLOW}"
+        printf "直接回车沿用 [${SAVED_FLOW}]，或输入 n 关闭 Flow [Y/n]: "
+        read -r FLOW_KEEP < /dev/tty
+        if [ "$FLOW_KEEP" = "n" ] || [ "$FLOW_KEEP" = "N" ]; then
+            XRAY_FLOW=""
+        else
+            XRAY_FLOW="$SAVED_FLOW"
+        fi
+    else
+        echo "是否开启 Flow 流控 (xtls-rprx-vision)？"
+        echo "  [1] 不开启 (留空，默认)"
+        echo "  [2] 开启 xtls-rprx-vision"
+        printf "请选择 [1-2] (回车默认 [1]): "
+        read -r FLOW_CHOICE < /dev/tty
+        if [ "$FLOW_CHOICE" = "2" ]; then
+            XRAY_FLOW="xtls-rprx-vision"
+        else
+            XRAY_FLOW=""
+        fi
+    fi
+else
+    XRAY_FLOW=""
+fi
+printf "%s" "$XRAY_FLOW" > "$FLOW_FILE"
+
+if [ -n "$XRAY_FLOW" ]; then
+    CLIENT_JSON="          {
+            \"id\": \"${UUID}\",
+            \"flow\": \"${XRAY_FLOW}\"
+          }"
+    FLOW_PARAM="&flow=${XRAY_FLOW}"
+else
+    CLIENT_JSON="          {
+            \"id\": \"${UUID}\"
+          }"
+    FLOW_PARAM=""
+fi
+
 echo "=== 5. 写入优化后的 Xray 本地回环配置 (无切片满血版) ==="
 cat << JSON > "${XRAY_CONF_DIR}/config.json"
 {
@@ -267,11 +397,9 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
       "protocol": "vless",
       "settings": {
         "clients": [
-          {
-            "id": "${UUID}"
-          }
+${CLIENT_JSON}
         ],
-        "decryption": "none"
+        "decryption": "${XRAY_DECRYPTION}"
       },
       "streamSettings": {
         "network": "xhttp",
@@ -466,8 +594,11 @@ fi
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
 # 仅保留 xmux 多路复用优化的 extra 参数，移除了切片限制
 EXTRA_PARAM="&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A%224-8%22%2C%22cMaxReuseTimes%22%3A%2232-64%22%7D%7D"
-VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=none&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
+VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=${XRAY_ENCRYPTION}${FLOW_PARAM}&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
+
+ENC_STATUS="none"
+[ "$XRAY_DECRYPTION" != "none" ] && ENC_STATUS="$(printf "%s" "$XRAY_DECRYPTION" | cut -c 1-36)..."
 
 echo ""
 echo "=================================================="
@@ -480,6 +611,8 @@ echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
 echo "连接地址 (优选)  : ${FINAL_ADDR}"
 echo "UUID             : ${UUID}"
 echo "Path             : ${XHTTP_PATH}"
+echo "Encryption (enc) : ${ENC_STATUS}"
+echo "Flow (流控)      : ${XRAY_FLOW:-none}"
 echo "=================================================="
 echo "📋 复制下方节点链接（已移除切片限制），在客户端中导入："
 echo ""
@@ -487,4 +620,5 @@ echo "${VLESS_LINK}"
 echo ""
 echo "=================================================="
 echo "💡 查看当前完整节点链接命令: cat /etc/argo-xhttp/vless.link"
+echo "💡 查看已保存的加密密钥命令: cat /etc/argo-xhttp/decryption /etc/argo-xhttp/encryption"
 echo "=================================================="
