@@ -23,3 +23,5 @@ wget -qO- https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/argo-
 Cloudflare Zero Trust 后台设置：
 ​进入 Networks -> Tunnels，选择你的固定隧道并进入 Public Hostname。
 ​Service Type 选择 HTTP，URL 填写 127.0.0.1:8080。
+
+推荐开启enc和vison flow
