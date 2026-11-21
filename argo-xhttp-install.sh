@@ -891,7 +891,7 @@ if [ "$TUNNEL_MODE" = "2" ]; then
 fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
-EXTRA_PARAM="&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A%224-8%22%2C%22cMaxReuseTimes%22%3A%2232-64%22%7D%7D"
+EXTRA_PARAM="&extra=%7B%22mode%22%3A%22packet-up%22%2C%22xPaddingBytes%22%3A%22100-1000%22%7D"
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=${XRAY_ENCRYPTION}${FLOW_PARAM}&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
 
@@ -909,7 +909,8 @@ else
 fi
 
 if [ "$REALITY_ENABLE" = "1" ]; then
-    REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}${REALITY_FLOW_PARAM}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&host=${REALITY_SNI}&path=${ENCODED_PATH}&mode=auto${EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
+    REALITY_EXTRA_PARAM="&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%7D"
+    REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}${REALITY_FLOW_PARAM}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&host=${REALITY_SNI}&path=${ENCODED_PATH}&mode=auto${REALITY_EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
     printf "%s\n" "$REALITY_LINK" > "$REALITY_LINK_FILE"
 else
     rm -f "$REALITY_LINK_FILE"
