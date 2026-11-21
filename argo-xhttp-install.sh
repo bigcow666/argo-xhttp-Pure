@@ -34,6 +34,7 @@ REALITY_PUB_FILE="${PERSIST_DIR}/reality_pub"
 REALITY_SID_FILE="${PERSIST_DIR}/reality_sid"
 REALITY_DEC_FILE="${PERSIST_DIR}/reality_dec"
 REALITY_ENC_FILE="${PERSIST_DIR}/reality_enc"
+REALITY_FLOW_FILE="${PERSIST_DIR}/reality_flow"
 REALITY_LINK_FILE="${PERSIST_DIR}/reality.link"
 
 # 精准检测活跃进程（彻底排除 Z 状态的 <defunct> 僵尸进程干扰）
@@ -190,6 +191,7 @@ SAVED_REALITY_PUB=$(cat "$REALITY_PUB_FILE" 2>/dev/null || true)
 SAVED_REALITY_SID=$(cat "$REALITY_SID_FILE" 2>/dev/null || true)
 SAVED_REALITY_DEC=$(cat "$REALITY_DEC_FILE" 2>/dev/null || true)
 SAVED_REALITY_ENC=$(cat "$REALITY_ENC_FILE" 2>/dev/null || true)
+SAVED_REALITY_FLOW=$(cat "$REALITY_FLOW_FILE" 2>/dev/null || true)
 
 # ---------------- 4.1 UUID 与 Path (Argo 与 Reality 共用) ----------------
 if [ -n "$SAVED_UUID" ] && [ -n "$SAVED_PATH" ]; then
@@ -407,7 +409,7 @@ if [ "$XRAY_DECRYPTION" != "none" ]; then
         fi
     else
         echo "是否开启 Flow 流控 (xtls-rprx-vision)？"
-        echo "  [1] 不开启 (留空，默认，XHTTP 推荐关闭)"
+        echo "  [1] 不开启 (留空，默认)"
         echo "  [2] 开启 xtls-rprx-vision"
         printf "请选择 [1-2] (回车默认 [1]): "
         read -r FLOW_CHOICE < /dev/tty
@@ -584,6 +586,33 @@ if [ "$REALITY_ENABLE" = "1" ]; then
         fi
     fi
 
+    # Reality Flow 配置（仅在开启 VLESS Encryption 时允许配置 Vision，否则自动跳过）
+    if [ "$REALITY_DEC" != "none" ]; then
+        if [ -n "$SAVED_REALITY_FLOW" ]; then
+            echo "✅ 已锁定 Reality Flow 流控: ${SAVED_REALITY_FLOW}"
+            printf "直接回车沿用 [${SAVED_REALITY_FLOW}]，或输入 n 关闭 Flow [Y/n]: "
+            read -r R_FLOW_KEEP < /dev/tty
+            if [ "$R_FLOW_KEEP" = "n" ] || [ "$R_FLOW_KEEP" = "N" ]; then
+                REALITY_FLOW=""
+            else
+                REALITY_FLOW="$SAVED_REALITY_FLOW"
+            fi
+        else
+            echo "是否开启 Reality Flow 流控 (xtls-rprx-vision)？"
+            echo "  [1] 不开启 (留空，默认)"
+            echo "  [2] 开启 xtls-rprx-vision"
+            printf "请选择 [1-2] (回车默认 [1]): "
+            read -r R_FLOW_CHOICE < /dev/tty
+            if [ "$R_FLOW_CHOICE" = "2" ]; then
+                REALITY_FLOW="xtls-rprx-vision"
+            else
+                REALITY_FLOW=""
+            fi
+        fi
+    else
+        REALITY_FLOW=""
+    fi
+
     printf "%s" "$REALITY_PORT" > "$REALITY_PORT_FILE"
     printf "%s" "$REALITY_SNI" > "$REALITY_SNI_FILE"
     printf "%s" "$REALITY_PRIV" > "$REALITY_PRIV_FILE"
@@ -591,6 +620,20 @@ if [ "$REALITY_ENABLE" = "1" ]; then
     printf "%s" "$REALITY_SID" > "$REALITY_SID_FILE"
     printf "%s" "$REALITY_DEC" > "$REALITY_DEC_FILE"
     printf "%s" "$REALITY_ENC" > "$REALITY_ENC_FILE"
+    printf "%s" "$REALITY_FLOW" > "$REALITY_FLOW_FILE"
+
+    if [ -n "$REALITY_FLOW" ]; then
+        REALITY_CLIENT_JSON="          {
+            \"id\": \"${UUID}\",
+            \"flow\": \"${REALITY_FLOW}\"
+          }"
+        REALITY_FLOW_PARAM="&flow=${REALITY_FLOW}"
+    else
+        REALITY_CLIENT_JSON="          {
+            \"id\": \"${UUID}\"
+          }"
+        REALITY_FLOW_PARAM=""
+    fi
 fi
 
 echo ""
@@ -627,9 +670,7 @@ if [ "$REALITY_ENABLE" = "1" ]; then
       \"protocol\": \"vless\",
       \"settings\": {
         \"clients\": [
-          {
-            \"id\": \"${UUID}\"
-          }
+${REALITY_CLIENT_JSON}
         ],
         \"decryption\": \"${REALITY_DEC}\"
       },
@@ -878,7 +919,7 @@ else
 fi
 
 if [ "$REALITY_ENABLE" = "1" ]; then
-    REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&host=${REALITY_SNI}&path=${ENCODED_PATH}&mode=auto${EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
+    REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}${REALITY_FLOW_PARAM}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&host=${REALITY_SNI}&path=${ENCODED_PATH}&mode=auto${EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
     printf "%s\n" "$REALITY_LINK" > "$REALITY_LINK_FILE"
 else
     rm -f "$REALITY_LINK_FILE"
@@ -923,6 +964,7 @@ if [ "$REALITY_ENABLE" = "1" ]; then
     echo "SNI / Host       : ${REALITY_SNI}"
     echo "Public Key / SID : ${REALITY_PUB} / ${REALITY_SID}"
     echo "Encryption (enc) : ${R_ENC_STATUS}"
+    echo "Flow (流控)      : ${REALITY_FLOW:-none}"
     echo ""
     echo "${REALITY_LINK}"
 fi
