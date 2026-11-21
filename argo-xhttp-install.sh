@@ -58,7 +58,7 @@ gen_vless_enc() {
     return 0
 }
 
-# 获取本机公网 IP（兼容 IPv4 / IPv6）
+# 获取本机公网 IP（优先 IPv4，无 IPv4 时自动回退 IPv6 并加括号）
 get_public_ip() {
     PUB_IP=$(curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || true)
     if [ -z "$PUB_IP" ]; then
@@ -229,7 +229,7 @@ printf "%s" "$ARGO_PORT" > "$ARGO_PORT_FILE"
 DEFAULT_MODE="${SAVED_MODE:-1}"
 echo ""
 echo "请选择 Cloudflare Argo 隧道模式："
-echo "  [1] 固定隧道 (绑定自有域名，支持 Token 或 fscarmen JSON)"
+echo "  [1] 固定隧道 (绑定自有域名，支持 Token 或 JSON)"
 echo "  [2] 临时隧道 (免账号免域名，自动申请 trycloudflare.com 临时域名)"
 printf "请输入序号 [1-2] (直接回车沿用默认 [${DEFAULT_MODE}]): "
 read -r INPUT_MODE < /dev/tty
@@ -269,7 +269,7 @@ if [ "$TUNNEL_MODE" = "1" ]; then
         fi
     else
         while [ -z "$CF_TOKEN" ]; do
-            printf "请输入 Argo 隧道 Token (eyJh...) 或 fscarmen 生成的 JSON: "
+            printf "请输入 Argo 隧道 Token (eyJh...) 或 JSON: "
             read -r CF_TOKEN < /dev/tty
         done
         printf "%s" "$CF_TOKEN" > "$TOKEN_FILE"
@@ -407,7 +407,7 @@ if [ "$XRAY_DECRYPTION" != "none" ]; then
         fi
     else
         echo "是否开启 Flow 流控 (xtls-rprx-vision)？"
-        echo "  [1] 不开启 (留空，默认)"
+        echo "  [1] 不开启 (留空，默认，XHTTP 推荐关闭)"
         echo "  [2] 开启 xtls-rprx-vision"
         printf "请选择 [1-2] (回车默认 [1]): "
         read -r FLOW_CHOICE < /dev/tty
@@ -435,7 +435,7 @@ else
     FLOW_PARAM=""
 fi
 
-# ---------------- 4.6 可选：SOCKS5 代理入站（手动设置端口与账号密码） ----------------
+# ---------------- 4.6 可选：SOCKS5 代理入站（手动设置端口与账号密码，双栈 ::） ----------------
 echo ""
 echo "=== 4.6 可选：SOCKS5 代理入站配置 ==="
 DEFAULT_SOCKS_EN="${SAVED_SOCKS_EN:-0}"
@@ -502,7 +502,7 @@ if [ "$SOCKS_ENABLE" = "1" ]; then
     echo "✅ 已配置 SOCKS5 入站: 端口 ${SOCKS_PORT} / 用户 ${SOCKS_USER}"
 fi
 
-# ---------------- 4.7 可选：XHTTP + ENC + Reality 直连入站（独立 stream-one，共用 UUID 与 Path） ----------------
+# ---------------- 4.7 可选：XHTTP + ENC + Reality 直连入站（默认 auto，双栈 ::，共用 UUID/Path） ----------------
 echo ""
 echo "=== 4.7 可选：XHTTP + ENC + Reality 直连入站配置 ==="
 DEFAULT_REALITY_EN="${SAVED_REALITY_EN:-0}"
@@ -544,8 +544,8 @@ if [ "$REALITY_ENABLE" = "1" ]; then
         echo "✅ 已沿用现有 Reality 密钥对与 ShortID。"
     else
         X25519_RAW=$(/usr/local/bin/xray x25519 2>/dev/null || true)
-        REALITY_PRIV=$(printf "%s\n" "$X25519_RAW" | awk -F': ' '/Private/ {print $2; exit}' | tr -d ' \r\n')
-        REALITY_PUB=$(printf "%s\n" "$X25519_RAW" | awk -F': ' '/Public|Password/ {print $2; exit}' | tr -d ' \r\n')
+        REALITY_PRIV=$(printf "%s\n" "$X25519_RAW" | awk -F':' '/Private/ {gsub(/[ \r\n]/, "", $2); print $2; exit}')
+        REALITY_PUB=$(printf "%s\n" "$X25519_RAW" | awk -F':' '/Public|Password/ {gsub(/[ \r\n]/, "", $2); print $2; exit}')
         REALITY_SID=$(openssl rand -hex 4)
         echo "✅ 已生成新的 Reality x25519 密钥对与 ShortID。"
     fi
@@ -594,7 +594,7 @@ if [ "$REALITY_ENABLE" = "1" ]; then
 fi
 
 echo ""
-echo "=== 5. 写入优化后的 Xray 配置 (Argo: packet-up / Reality: stream-one) ==="
+echo "=== 5. 写入优化后的 Xray 配置 (Argo: packet-up / Reality: auto 双栈) ==="
 
 EXTRA_INBOUNDS=""
 
@@ -602,7 +602,7 @@ if [ "$SOCKS_ENABLE" = "1" ]; then
     EXTRA_INBOUNDS="${EXTRA_INBOUNDS},
     {
       \"tag\": \"socks-in\",
-      \"listen\": \"0.0.0.0\",
+      \"listen\": \"::\",
       \"port\": ${SOCKS_PORT},
       \"protocol\": \"socks\",
       \"settings\": {
@@ -622,7 +622,7 @@ if [ "$REALITY_ENABLE" = "1" ]; then
     EXTRA_INBOUNDS="${EXTRA_INBOUNDS},
     {
       \"tag\": \"xhttp-reality-in\",
-      \"listen\": \"0.0.0.0\",
+      \"listen\": \"::\",
       \"port\": ${REALITY_PORT},
       \"protocol\": \"vless\",
       \"settings\": {
@@ -637,7 +637,7 @@ if [ "$REALITY_ENABLE" = "1" ]; then
         \"network\": \"xhttp\",
         \"xhttpSettings\": {
           \"path\": \"${XHTTP_PATH}\",
-          \"mode\": \"stream-one\"
+          \"mode\": \"auto\"
         },
         \"security\": \"reality\",
         \"realitySettings\": {
@@ -878,7 +878,7 @@ else
 fi
 
 if [ "$REALITY_ENABLE" = "1" ]; then
-    REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&path=${ENCODED_PATH}&mode=stream-one${EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
+    REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&host=${REALITY_SNI}&path=${ENCODED_PATH}&mode=auto${EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
     printf "%s\n" "$REALITY_LINK" > "$REALITY_LINK_FILE"
 else
     rm -f "$REALITY_LINK_FILE"
@@ -907,7 +907,7 @@ echo "${VLESS_LINK}"
 
 if [ "$SOCKS_ENABLE" = "1" ]; then
     echo "--------------------------------------------------"
-    echo "【2. SOCKS5 节点】 (请确保防火墙放行 TCP/UDP ${SOCKS_PORT})"
+    echo "【2. SOCKS5 节点 (双栈 ::)】 (请确保防火墙放行 TCP/UDP ${SOCKS_PORT})"
     echo "地址:端口        : ${SERVER_IP}:${SOCKS_PORT}"
     echo "用户名 / 密码    : ${SOCKS_USER} / ${SOCKS_PASS}"
     echo ""
@@ -918,9 +918,9 @@ if [ "$REALITY_ENABLE" = "1" ]; then
     R_ENC_STATUS="none"
     [ "$REALITY_DEC" != "none" ] && R_ENC_STATUS="$(printf "%s" "$REALITY_DEC" | cut -c 1-36)..."
     echo "--------------------------------------------------"
-    echo "【3. XHTTP + ENC + Reality 直连节点 (stream-one)】 (请确保防火墙放行 TCP ${REALITY_PORT})"
+    echo "【3. XHTTP + ENC + Reality 直连节点 (auto 双栈 ::)】 (请确保防火墙放行 TCP ${REALITY_PORT})"
     echo "地址:端口        : ${SERVER_IP}:${REALITY_PORT}"
-    echo "SNI              : ${REALITY_SNI}"
+    echo "SNI / Host       : ${REALITY_SNI}"
     echo "Public Key / SID : ${REALITY_PUB} / ${REALITY_SID}"
     echo "Encryption (enc) : ${R_ENC_STATUS}"
     echo ""
