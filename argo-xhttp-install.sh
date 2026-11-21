@@ -17,12 +17,33 @@ ENC_FILE="${PERSIST_DIR}/encryption"
 FLOW_FILE="${PERSIST_DIR}/flow"
 LINK_FILE="${PERSIST_DIR}/vless.link"
 
+# SOCKS5 节点持久化文件
+SOCKS_EN_FILE="${PERSIST_DIR}/socks_enable"
+SOCKS_PORT_FILE="${PERSIST_DIR}/socks_port"
+SOCKS_USER_FILE="${PERSIST_DIR}/socks_user"
+SOCKS_PASS_FILE="${PERSIST_DIR}/socks_pass"
+SOCKS_LINK_FILE="${PERSIST_DIR}/socks.link"
+
+# Reality 节点持久化文件
+REALITY_EN_FILE="${PERSIST_DIR}/reality_enable"
+REALITY_PORT_FILE="${PERSIST_DIR}/reality_port"
+REALITY_UUID_FILE="${PERSIST_DIR}/reality_uuid"
+REALITY_PATH_FILE="${PERSIST_DIR}/reality_path"
+REALITY_SNI_FILE="${PERSIST_DIR}/reality_sni"
+REALITY_PRIV_FILE="${PERSIST_DIR}/reality_priv"
+REALITY_PUB_FILE="${PERSIST_DIR}/reality_pub"
+REALITY_SID_FILE="${PERSIST_DIR}/reality_sid"
+REALITY_DEC_FILE="${PERSIST_DIR}/reality_dec"
+REALITY_ENC_FILE="${PERSIST_DIR}/reality_enc"
+REALITY_FLOW_FILE="${PERSIST_DIR}/reality_flow"
+REALITY_LINK_FILE="${PERSIST_DIR}/reality.link"
+
 # 精准检测活跃进程（彻底排除 Z 状态的 <defunct> 僵尸进程干扰）
 is_alive() {
     ps -eo stat,comm 2>/dev/null | awk -v p="$1" '$1 !~ /Z/ && $2 == p {found=1} END {exit !found}'
 }
 
-# 生成 VLESS Encryption 密钥对 (参数1: 外观模式 native/xorpub/random)
+# 生成 VLESS Encryption 密钥对 (参数1: 外观模式 native/xorpub/random)，结果写入 GEN_DEC / GEN_ENC
 gen_vless_enc() {
     MODE_STYLE="${1:-xorpub}"
     ENC_RAW=$(/usr/local/bin/xray vlessenc 2>/dev/null || true)
@@ -36,8 +57,8 @@ gen_vless_enc() {
         return 1
     fi
     # 替换第 2 段外观模式 (native -> xorpub/random/native)
-    XRAY_DECRYPTION=$(printf "%s" "$RAW_DEC" | sed -E "s/^([^.]+)\.[^.]+\./\1.${MODE_STYLE}./")
-    XRAY_ENCRYPTION=$(printf "%s" "$RAW_ENC" | sed -E "s/^([^.]+)\.[^.]+\./\1.${MODE_STYLE}./")
+    GEN_DEC=$(printf "%s" "$RAW_DEC" | sed -E "s/^([^.]+)\.[^.]+\./\1.${MODE_STYLE}./")
+    GEN_ENC=$(printf "%s" "$RAW_ENC" | sed -E "s/^([^.]+)\.[^.]+\./\1.${MODE_STYLE}./")
     return 0
 }
 
@@ -147,6 +168,23 @@ SAVED_ADDR=$(cat "$ADDR_FILE" 2>/dev/null || true)
 SAVED_DEC=$(cat "$DEC_FILE" 2>/dev/null || true)
 SAVED_ENC=$(cat "$ENC_FILE" 2>/dev/null || true)
 SAVED_FLOW=$(cat "$FLOW_FILE" 2>/dev/null || true)
+
+SAVED_SOCKS_EN=$(cat "$SOCKS_EN_FILE" 2>/dev/null || true)
+SAVED_SOCKS_PORT=$(cat "$SOCKS_PORT_FILE" 2>/dev/null || true)
+SAVED_SOCKS_USER=$(cat "$SOCKS_USER_FILE" 2>/dev/null || true)
+SAVED_SOCKS_PASS=$(cat "$SOCKS_PASS_FILE" 2>/dev/null || true)
+
+SAVED_REALITY_EN=$(cat "$REALITY_EN_FILE" 2>/dev/null || true)
+SAVED_REALITY_PORT=$(cat "$REALITY_PORT_FILE" 2>/dev/null || true)
+SAVED_REALITY_UUID=$(cat "$REALITY_UUID_FILE" 2>/dev/null || true)
+SAVED_REALITY_PATH=$(cat "$REALITY_PATH_FILE" 2>/dev/null || true)
+SAVED_REALITY_SNI=$(cat "$REALITY_SNI_FILE" 2>/dev/null || true)
+SAVED_REALITY_PRIV=$(cat "$REALITY_PRIV_FILE" 2>/dev/null || true)
+SAVED_REALITY_PUB=$(cat "$REALITY_PUB_FILE" 2>/dev/null || true)
+SAVED_REALITY_SID=$(cat "$REALITY_SID_FILE" 2>/dev/null || true)
+SAVED_REALITY_DEC=$(cat "$REALITY_DEC_FILE" 2>/dev/null || true)
+SAVED_REALITY_ENC=$(cat "$REALITY_ENC_FILE" 2>/dev/null || true)
+SAVED_REALITY_FLOW=$(cat "$REALITY_FLOW_FILE" 2>/dev/null || true)
 
 # ---------------- 4.1 UUID 与 Path ----------------
 if [ -n "$SAVED_UUID" ] && [ -n "$SAVED_PATH" ]; then
@@ -279,9 +317,9 @@ case "$OPT_CHOICE" in
 esac
 printf "%s" "$ADDR" > "$ADDR_FILE"
 
-# ---------------- 4.5 VLESS Encryption 与 Flow (可选并持久化) ----------------
+# ---------------- 4.5 Argo VLESS Encryption 与 Flow (可选并持久化) ----------------
 echo ""
-echo "=== 4.5 VLESS Encryption (enc) 与 Flow 配置 ==="
+echo "=== 4.5 Argo 节点 VLESS Encryption (enc) 与 Flow 配置 ==="
 XRAY_DECRYPTION="none"
 XRAY_ENCRYPTION="none"
 NEED_GEN_ENC="0"
@@ -332,6 +370,8 @@ if [ "$NEED_GEN_ENC" = "1" ]; then
     esac
 
     if gen_vless_enc "$ENC_STYLE"; then
+        XRAY_DECRYPTION="$GEN_DEC"
+        XRAY_ENCRYPTION="$GEN_ENC"
         echo "✅ 已生成 VLESS Encryption (${ENC_STYLE}) 并写入持久化文件。"
     else
         echo "⚠️ 当前 Xray 版本不支持 xray vlessenc，已自动回退为 none。"
@@ -343,7 +383,6 @@ fi
 printf "%s" "$XRAY_DECRYPTION" > "$DEC_FILE"
 printf "%s" "$XRAY_ENCRYPTION" > "$ENC_FILE"
 
-# Flow 配置（仅在开启 VLESS Encryption 时允许配置 Vision）
 if [ "$XRAY_DECRYPTION" != "none" ]; then
     if [ -n "$SAVED_FLOW" ]; then
         echo "✅ 已锁定 Flow 流控: ${SAVED_FLOW}"
@@ -384,7 +423,257 @@ else
     FLOW_PARAM=""
 fi
 
-echo "=== 5. 写入优化后的 Xray 本地回环配置 (无切片满血版) ==="
+# ---------------- 4.6 附加节点：SOCKS5 (可选并持久化) ----------------
+echo ""
+echo "=== 4.6 附加节点：SOCKS5 入站配置 ==="
+SOCKS_EN="0"
+NEED_CFG_SOCKS="0"
+
+if [ "$SAVED_SOCKS_EN" = "1" ] && [ -n "$SAVED_SOCKS_PORT" ]; then
+    echo "✅ 已锁定 SOCKS5 节点: 端口 ${SAVED_SOCKS_PORT} (用户: ${SAVED_SOCKS_USER:-无认证})"
+    echo "  [1] 保留当前 SOCKS5 配置 (默认)"
+    echo "  [2] 重新配置 SOCKS5 节点"
+    echo "  [3] 关闭 SOCKS5 节点"
+    printf "请选择 [1-3] (直接回车保留当前): "
+    read -r SOCKS_ACT < /dev/tty
+    case "$SOCKS_ACT" in
+        2) NEED_CFG_SOCKS="1" ;;
+        3)
+            SOCKS_EN="0"
+            echo "🔄 已关闭 SOCKS5 节点。"
+            ;;
+        *)
+            SOCKS_EN="1"
+            SOCKS_PORT="$SAVED_SOCKS_PORT"
+            SOCKS_USER="$SAVED_SOCKS_USER"
+            SOCKS_PASS="$SAVED_SOCKS_PASS"
+            echo "✅ 已沿用现有 SOCKS5 配置。"
+            ;;
+    esac
+else
+    echo "当前未启用 SOCKS5 节点。是否开启？"
+    echo "  [1] 关闭 (默认)"
+    echo "  [2] 开启 SOCKS5 节点"
+    printf "请选择 [1-2] (回车默认 [1]): "
+    read -r SOCKS_CHOICE < /dev/tty
+    if [ "$SOCKS_CHOICE" = "2" ]; then
+        NEED_CFG_SOCKS="1"
+    fi
+fi
+
+if [ "$NEED_CFG_SOCKS" = "1" ]; then
+    SOCKS_EN="1"
+    printf "请输入 SOCKS5 监听端口 (回车默认 10808): "
+    read -r IN_SOCKS_PORT < /dev/tty
+    SOCKS_PORT="${IN_SOCKS_PORT:-10808}"
+
+    printf "请输入 SOCKS5 用户名 (留空则无认证，直接回车): "
+    read -r SOCKS_USER < /dev/tty
+    if [ -n "$SOCKS_USER" ]; then
+        printf "请输入 SOCKS5 密码 (回车随机生成): "
+        read -r IN_SOCKS_PASS < /dev/tty
+        SOCKS_PASS="${IN_SOCKS_PASS:-$(openssl rand -hex 8)}"
+    else
+        SOCKS_PASS=""
+    fi
+    printf "%s" "$SOCKS_PORT" > "$SOCKS_PORT_FILE"
+    printf "%s" "$SOCKS_USER" > "$SOCKS_USER_FILE"
+    printf "%s" "$SOCKS_PASS" > "$SOCKS_PASS_FILE"
+    echo "✅ 已保存 SOCKS5 节点配置。"
+fi
+printf "%s" "$SOCKS_EN" > "$SOCKS_EN_FILE"
+
+SOCKS_INBOUND_JSON=""
+if [ "$SOCKS_EN" = "1" ]; then
+    if [ -n "$SOCKS_USER" ]; then
+        SOCKS_AUTH_JSON="\"auth\": \"password\",
+        \"accounts\": [
+          {
+            \"user\": \"${SOCKS_USER}\",
+            \"pass\": \"${SOCKS_PASS}\"
+          }
+        ],"
+    else
+        SOCKS_AUTH_JSON="\"auth\": \"noauth\","
+    fi
+    SOCKS_INBOUND_JSON=",
+    {
+      \"tag\": \"socks-in\",
+      \"listen\": \"0.0.0.0\",
+      \"port\": ${SOCKS_PORT},
+      \"protocol\": \"socks\",
+      \"settings\": {
+        ${SOCKS_AUTH_JSON}
+        \"udp\": true
+      }
+    }"
+fi
+
+# ---------------- 4.7 附加节点：VLESS + XHTTP + Reality + enc + Flow (可选并持久化) ----------------
+echo ""
+echo "=== 4.7 附加节点：VLESS + XHTTP + Reality + enc + Flow 配置 ==="
+REALITY_EN="0"
+NEED_CFG_REALITY="0"
+
+if [ "$SAVED_REALITY_EN" = "1" ] && [ -n "$SAVED_REALITY_PORT" ] && [ -n "$SAVED_REALITY_PRIV" ]; then
+    R_ENC_SHOW="none"
+    [ -n "$SAVED_REALITY_DEC" ] && [ "$SAVED_REALITY_DEC" != "none" ] && R_ENC_SHOW="已开启"
+    echo "✅ 已锁定 Reality 节点: 端口 ${SAVED_REALITY_PORT} | SNI: ${SAVED_REALITY_SNI} | enc: ${R_ENC_SHOW} | Flow: ${SAVED_REALITY_FLOW:-none}"
+    echo "  [1] 保留当前 Reality 配置 (默认)"
+    echo "  [2] 重新配置 Reality 节点"
+    echo "  [3] 关闭 Reality 节点"
+    printf "请选择 [1-3] (直接回车保留当前): "
+    read -r REALITY_ACT < /dev/tty
+    case "$REALITY_ACT" in
+        2) NEED_CFG_REALITY="1" ;;
+        3)
+            REALITY_EN="0"
+            echo "🔄 已关闭 Reality 节点。"
+            ;;
+        *)
+            REALITY_EN="1"
+            REALITY_PORT="$SAVED_REALITY_PORT"
+            REALITY_UUID="$SAVED_REALITY_UUID"
+            REALITY_PATH="$SAVED_REALITY_PATH"
+            REALITY_SNI="$SAVED_REALITY_SNI"
+            REALITY_PRIV="$SAVED_REALITY_PRIV"
+            REALITY_PUB="$SAVED_REALITY_PUB"
+            REALITY_SID="$SAVED_REALITY_SID"
+            REALITY_DEC="${SAVED_REALITY_DEC:-none}"
+            REALITY_ENC="${SAVED_REALITY_ENC:-none}"
+            REALITY_FLOW="$SAVED_REALITY_FLOW"
+            echo "✅ 已沿用现有 Reality 配置。"
+            ;;
+    esac
+else
+    echo "当前未启用 VLESS + XHTTP + Reality 节点。是否开启？"
+    echo "  [1] 关闭 (默认)"
+    echo "  [2] 开启 VLESS + XHTTP + Reality 节点"
+    printf "请选择 [1-2] (回车默认 [1]): "
+    read -r REALITY_CHOICE < /dev/tty
+    if [ "$REALITY_CHOICE" = "2" ]; then
+        NEED_CFG_REALITY="1"
+    fi
+fi
+
+if [ "$NEED_CFG_REALITY" = "1" ]; then
+    REALITY_EN="1"
+    printf "请输入 Reality 监听端口 (回车默认 443): "
+    read -r IN_R_PORT < /dev/tty
+    REALITY_PORT="${IN_R_PORT:-443}"
+
+    printf "请输入 Reality 偷取域名 SNI (回车默认 www.microsoft.com): "
+    read -r IN_R_SNI < /dev/tty
+    REALITY_SNI="${IN_R_SNI:-www.microsoft.com}"
+
+    REALITY_UUID=$(/usr/local/bin/xray uuid)
+    REALITY_PATH="/$(openssl rand -hex 6)"
+    REALITY_SID=$(openssl rand -hex 4)
+
+    X25519_OUT=$(/usr/local/bin/xray x25519 2>/dev/null || true)
+    REALITY_PRIV=$(printf "%s\n" "$X25519_OUT" | awk -F': ' '/Private/ {print $2}' | tr -d ' \r\n')
+    REALITY_PUB=$(printf "%s\n" "$X25519_OUT" | awk -F': ' '/Public|Password/ {print $2}' | tr -d ' \r\n')
+
+    # Reality 节点的 VLESS Encryption
+    REALITY_DEC="none"
+    REALITY_ENC="none"
+    echo "是否为 Reality 节点开启 VLESS Encryption (enc)？"
+    echo "  [1] 关闭 (none，默认)"
+    echo "  [2] 开启 VLESS Encryption (xorpub / native / random)"
+    printf "请选择 [1-2] (回车默认 [1]): "
+    read -r R_ENC_CHOICE < /dev/tty
+    if [ "$R_ENC_CHOICE" = "2" ]; then
+        echo "请选择外观模式: [1] xorpub (默认)  [2] native  [3] random"
+        printf "请选择 [1-3] (回车默认 [1]): "
+        read -r R_STYLE_CHOICE < /dev/tty
+        case "$R_STYLE_CHOICE" in
+            2) R_STYLE="native" ;;
+            3) R_STYLE="random" ;;
+            *) R_STYLE="xorpub" ;;
+        esac
+        if gen_vless_enc "$R_STYLE"; then
+            REALITY_DEC="$GEN_DEC"
+            REALITY_ENC="$GEN_ENC"
+            echo "✅ 已为 Reality 节点生成 VLESS Encryption (${R_STYLE})。"
+        else
+            echo "⚠️ 当前 Xray 不支持 vlessenc，已回退为 none。"
+        fi
+    fi
+
+    # Reality 节点的 Flow 流控
+    echo "是否为 Reality 节点开启 Flow 流控 (xtls-rprx-vision)？"
+    echo "  [1] 不开启 (留空，默认)"
+    echo "  [2] 开启 xtls-rprx-vision"
+    printf "请选择 [1-2] (回车默认 [1]): "
+    read -r R_FLOW_CHOICE < /dev/tty
+    if [ "$R_FLOW_CHOICE" = "2" ]; then
+        REALITY_FLOW="xtls-rprx-vision"
+    else
+        REALITY_FLOW=""
+    fi
+
+    printf "%s" "$REALITY_PORT" > "$REALITY_PORT_FILE"
+    printf "%s" "$REALITY_UUID" > "$REALITY_UUID_FILE"
+    printf "%s" "$REALITY_PATH" > "$REALITY_PATH_FILE"
+    printf "%s" "$REALITY_SNI" > "$REALITY_SNI_FILE"
+    printf "%s" "$REALITY_PRIV" > "$REALITY_PRIV_FILE"
+    printf "%s" "$REALITY_PUB" > "$REALITY_PUB_FILE"
+    printf "%s" "$REALITY_SID" > "$REALITY_SID_FILE"
+    printf "%s" "$REALITY_DEC" > "$REALITY_DEC_FILE"
+    printf "%s" "$REALITY_ENC" > "$REALITY_ENC_FILE"
+    printf "%s" "$REALITY_FLOW" > "$REALITY_FLOW_FILE"
+    echo "✅ 已保存 Reality 节点配置。"
+fi
+printf "%s" "$REALITY_EN" > "$REALITY_EN_FILE"
+
+REALITY_INBOUND_JSON=""
+if [ "$REALITY_EN" = "1" ]; then
+    if [ -n "$REALITY_FLOW" ]; then
+        R_CLIENT_JSON="          {
+            \"id\": \"${REALITY_UUID}\",
+            \"flow\": \"${REALITY_FLOW}\"
+          }"
+    else
+        R_CLIENT_JSON="          {
+            \"id\": \"${REALITY_UUID}\"
+          }"
+    fi
+    REALITY_INBOUND_JSON=",
+    {
+      \"tag\": \"reality-in\",
+      \"listen\": \"0.0.0.0\",
+      \"port\": ${REALITY_PORT},
+      \"protocol\": \"vless\",
+      \"settings\": {
+        \"clients\": [
+${R_CLIENT_JSON}
+        ],
+        \"decryption\": \"${REALITY_DEC}\"
+      },
+      \"streamSettings\": {
+        \"network\": \"xhttp\",
+        \"xhttpSettings\": {
+          \"path\": \"${REALITY_PATH}\",
+          \"mode\": \"auto\"
+        },
+        \"security\": \"reality\",
+        \"realitySettings\": {
+          \"show\": false,
+          \"dest\": \"${REALITY_SNI}:443\",
+          \"xver\": 0,
+          \"serverNames\": [
+            \"${REALITY_SNI}\"
+          ],
+          \"privateKey\": \"${REALITY_PRIV}\",
+          \"shortIds\": [
+            \"${REALITY_SID}\"
+          ]
+        }
+      }
+    }"
+fi
+
+echo "=== 5. 写入优化后的 Xray 配置 (无切片满血版) ==="
 cat << JSON > "${XRAY_CONF_DIR}/config.json"
 {
   "log": {
@@ -392,6 +681,7 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
   },
   "inbounds": [
     {
+      "tag": "argo-in",
       "listen": "127.0.0.1",
       "port": 8080,
       "protocol": "vless",
@@ -415,7 +705,7 @@ ${CLIENT_JSON}
           ]
         }
       }
-    }
+    }${SOCKS_INBOUND_JSON}${REALITY_INBOUND_JSON}
   ],
   "outbounds": [
     {
@@ -591,11 +881,46 @@ if [ "$TUNNEL_MODE" = "2" ]; then
     [ -z "$CF_DOMAIN" ] && CF_DOMAIN="请检查 /var/log/cloudflared.log 获取临时域名"
 fi
 
+# 获取公网 IP（仅在开启了 SOCKS5 或 Reality 节点时查询）
+SERVER_IP=""
+if [ "$SOCKS_EN" = "1" ] || [ "$REALITY_EN" = "1" ]; then
+    SERVER_IP=$(curl -s4m 5 https://api.ipify.org 2>/dev/null || curl -s4m 5 https://ifconfig.me 2>/dev/null || curl -s6m 5 https://api64.ipify.org 2>/dev/null || echo "YOUR_SERVER_IP")
+    case "$SERVER_IP" in
+        *:*) SERVER_IP_URL="[${SERVER_IP}]" ;;
+        *) SERVER_IP_URL="${SERVER_IP}" ;;
+    esac
+fi
+
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
 # 仅保留 xmux 多路复用优化的 extra 参数，移除了切片限制
 EXTRA_PARAM="&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A%224-8%22%2C%22cMaxReuseTimes%22%3A%2232-64%22%7D%7D"
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=${XRAY_ENCRYPTION}${FLOW_PARAM}&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
+
+SOCKS_LINK=""
+if [ "$SOCKS_EN" = "1" ]; then
+    if [ -n "$SOCKS_USER" ]; then
+        SOCKS_B64=$(printf "%s:%s" "$SOCKS_USER" "$SOCKS_PASS" | base64 | tr -d '\n')
+        SOCKS_LINK="socks://${SOCKS_B64}@${SERVER_IP_URL}:${SOCKS_PORT}#SOCKS5-${SERVER_IP}"
+    else
+        SOCKS_LINK="socks://${SERVER_IP_URL}:${SOCKS_PORT}#SOCKS5-${SERVER_IP}"
+    fi
+    printf "%s\n" "$SOCKS_LINK" > "$SOCKS_LINK_FILE"
+else
+    rm -f "$SOCKS_LINK_FILE"
+fi
+
+REALITY_LINK=""
+if [ "$REALITY_EN" = "1" ]; then
+    R_RAND_STR=$(echo "$REALITY_PATH" | sed 's/^\///')
+    R_ENCODED_PATH="%2F${R_RAND_STR}"
+    R_FLOW_PARAM=""
+    [ -n "$REALITY_FLOW" ] && R_FLOW_PARAM="&flow=${REALITY_FLOW}"
+    REALITY_LINK="vless://${REALITY_UUID}@${SERVER_IP_URL}:${REALITY_PORT}?encryption=${REALITY_ENC}${R_FLOW_PARAM}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&path=${R_ENCODED_PATH}&mode=auto#Reality-XHTTP-${SERVER_IP}"
+    printf "%s\n" "$REALITY_LINK" > "$REALITY_LINK_FILE"
+else
+    rm -f "$REALITY_LINK_FILE"
+fi
 
 ENC_STATUS="none"
 [ "$XRAY_DECRYPTION" != "none" ] && ENC_STATUS="$(printf "%s" "$XRAY_DECRYPTION" | cut -c 1-36)..."
@@ -613,12 +938,25 @@ echo "UUID             : ${UUID}"
 echo "Path             : ${XHTTP_PATH}"
 echo "Encryption (enc) : ${ENC_STATUS}"
 echo "Flow (流控)      : ${XRAY_FLOW:-none}"
-echo "=================================================="
-echo "📋 复制下方节点链接（已移除切片限制），在客户端中导入："
-echo ""
+echo "--------------------------------------------------"
+echo "📋 [1] Argo-XHTTP 节点链接："
 echo "${VLESS_LINK}"
-echo ""
+
+if [ "$SOCKS_EN" = "1" ]; then
+    echo "--------------------------------------------------"
+    echo "📋 [2] SOCKS5 节点链接 (端口: ${SOCKS_PORT} / 用户: ${SOCKS_USER:-无认证})："
+    echo "${SOCKS_LINK}"
+fi
+
+if [ "$REALITY_EN" = "1" ]; then
+    echo "--------------------------------------------------"
+    echo "📋 [3] VLESS+XHTTP+Reality 节点链接 (端口: ${REALITY_PORT} / SNI: ${REALITY_SNI})："
+    echo "${REALITY_LINK}"
+fi
+
 echo "=================================================="
-echo "💡 查看当前完整节点链接命令: cat /etc/argo-xhttp/vless.link"
-echo "💡 查看已保存的加密密钥命令: cat /etc/argo-xhttp/decryption /etc/argo-xhttp/encryption"
+echo "💡 查看节点链接命令:"
+echo "   Argo    : cat /etc/argo-xhttp/vless.link"
+[ "$SOCKS_EN" = "1" ] && echo "   SOCKS5  : cat /etc/argo-xhttp/socks.link"
+[ "$REALITY_EN" = "1" ] && echo "   Reality : cat /etc/argo-xhttp/reality.link"
 echo "=================================================="
