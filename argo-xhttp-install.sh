@@ -9,6 +9,7 @@ chmod 700 "$PERSIST_DIR"
 UUID_FILE="${PERSIST_DIR}/uuid"
 PATH_FILE="${PERSIST_DIR}/path"
 MODE_FILE="${PERSIST_DIR}/mode"
+ARGO_PORT_FILE="${PERSIST_DIR}/argo_port"
 DOMAIN_FILE="${PERSIST_DIR}/domain"
 TOKEN_FILE="${PERSIST_DIR}/token"
 ADDR_FILE="${PERSIST_DIR}/addr"
@@ -41,20 +42,17 @@ is_alive() {
 }
 
 # 生成 VLESS Encryption 密钥对 (参数1: 外观模式 native/xorpub/random)
-# 结果写入 GEN_DEC / GEN_ENC，避免 Argo 与 Reality 互相覆盖
 gen_vless_enc() {
     MODE_STYLE="${1:-xorpub}"
     ENC_RAW=$(/usr/local/bin/xray vlessenc 2>/dev/null || true)
     if [ -z "$ENC_RAW" ]; then
         return 1
     fi
-    # 提取最后一组（Post-Quantum ML-KEM-768）的 decryption 与 encryption
     RAW_DEC=$(printf "%s\n" "$ENC_RAW" | grep '"decryption":' | tail -n 1 | sed -E 's/.*"decryption":[[:space:]]*"([^"]+)".*/\1/')
     RAW_ENC=$(printf "%s\n" "$ENC_RAW" | grep '"encryption":' | tail -n 1 | sed -E 's/.*"encryption":[[:space:]]*"([^"]+)".*/\1/')
     if [ -z "$RAW_DEC" ] || [ -z "$RAW_ENC" ]; then
         return 1
     fi
-    # 替换第 2 段外观模式 (native -> xorpub/random/native)
     GEN_DEC=$(printf "%s" "$RAW_DEC" | sed -E "s/^([^.]+)\.[^.]+\./\1.${MODE_STYLE}./")
     GEN_ENC=$(printf "%s" "$RAW_ENC" | sed -E "s/^([^.]+)\.[^.]+\./\1.${MODE_STYLE}./")
     return 0
@@ -171,6 +169,7 @@ fi
 SAVED_UUID=$(cat "$UUID_FILE" 2>/dev/null || true)
 SAVED_PATH=$(cat "$PATH_FILE" 2>/dev/null || true)
 SAVED_MODE=$(cat "$MODE_FILE" 2>/dev/null || true)
+SAVED_ARGO_PORT=$(cat "$ARGO_PORT_FILE" 2>/dev/null || true)
 SAVED_DOMAIN=$(cat "$DOMAIN_FILE" 2>/dev/null || true)
 SAVED_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || true)
 SAVED_ADDR=$(cat "$ADDR_FILE" 2>/dev/null || true)
@@ -219,7 +218,14 @@ fi
 RAND_STR=$(echo "$XHTTP_PATH" | sed 's/^\///')
 ENCODED_PATH="%2F${RAND_STR}"
 
-# ---------------- 4.2 隧道模式 ----------------
+# ---------------- 4.2 Argo 本地回环端口与隧道模式 ----------------
+DEF_ARGO_PORT="${SAVED_ARGO_PORT:-8080}"
+echo ""
+printf "请输入 Argo 本地回环端口 (直接回车默认 [${DEF_ARGO_PORT}]): "
+read -r IN_ARGO_PORT < /dev/tty
+ARGO_PORT="${IN_ARGO_PORT:-$DEF_ARGO_PORT}"
+printf "%s" "$ARGO_PORT" > "$ARGO_PORT_FILE"
+
 DEFAULT_MODE="${SAVED_MODE:-1}"
 echo ""
 echo "请选择 Cloudflare Argo 隧道模式："
@@ -278,7 +284,7 @@ credentials-file: ${PERSIST_DIR}/tunnel.json
 protocol: http2
 ingress:
   - hostname: ${CF_DOMAIN}
-    service: http://127.0.0.1:8080
+    service: http://127.0.0.1:${ARGO_PORT}
   - service: http_status:404
 YAML
         CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --config ${PERSIST_DIR}/config.yml run"
@@ -289,7 +295,7 @@ YAML
 else
     echo "⚡ 已选择【临时隧道】..."
     rm -f /var/log/cloudflared.log "${PERSIST_DIR}/config.yml" "${PERSIST_DIR}/tunnel.json"
-    CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --url http://127.0.0.1:8080 --logfile /var/log/cloudflared.log"
+    CF_RUN_ARGS="tunnel --no-autoupdate --protocol http2 --ha-connections 1 --url http://127.0.0.1:${ARGO_PORT} --logfile /var/log/cloudflared.log"
 fi
 
 # ---------------- 4.4 优选域名读取与写入 ----------------
@@ -389,7 +395,6 @@ fi
 printf "%s" "$XRAY_DECRYPTION" > "$DEC_FILE"
 printf "%s" "$XRAY_ENCRYPTION" > "$ENC_FILE"
 
-# Flow 配置（仅在开启 VLESS Encryption 时允许配置 Vision）
 if [ "$XRAY_DECRYPTION" != "none" ]; then
     if [ -n "$SAVED_FLOW" ]; then
         echo "✅ 已锁定 Flow 流控: ${SAVED_FLOW}"
@@ -455,7 +460,6 @@ fi
 printf "%s" "$SOCKS_ENABLE" > "$SOCKS_EN_FILE"
 
 if [ "$SOCKS_ENABLE" = "1" ]; then
-    # 手动设置端口
     if [ -n "$SAVED_SOCKS_PORT" ]; then
         printf "请输入 SOCKS5 监听端口 (直接回车沿用 [${SAVED_SOCKS_PORT}]): "
         read -r IN_S_PORT < /dev/tty
@@ -468,7 +472,6 @@ if [ "$SOCKS_ENABLE" = "1" ]; then
         done
     fi
 
-    # 手动设置用户名
     if [ -n "$SAVED_SOCKS_USER" ]; then
         printf "请输入 SOCKS5 用户名 (直接回车沿用 [${SAVED_SOCKS_USER}]): "
         read -r IN_S_USER < /dev/tty
@@ -481,7 +484,6 @@ if [ "$SOCKS_ENABLE" = "1" ]; then
         done
     fi
 
-    # 手动设置密码
     if [ -n "$SAVED_SOCKS_PASS" ]; then
         printf "请输入 SOCKS5 密码 (直接回车沿用已保存密码): "
         read -r IN_S_PASS < /dev/tty
@@ -500,7 +502,7 @@ if [ "$SOCKS_ENABLE" = "1" ]; then
     echo "✅ 已配置 SOCKS5 入站: 端口 ${SOCKS_PORT} / 用户 ${SOCKS_USER}"
 fi
 
-# ---------------- 4.7 可选：XHTTP + ENC + Reality 直连入站（共用 UUID 与 Path） ----------------
+# ---------------- 4.7 可选：XHTTP + ENC + Reality 直连入站（独立 stream-one，共用 UUID 与 Path） ----------------
 echo ""
 echo "=== 4.7 可选：XHTTP + ENC + Reality 直连入站配置 ==="
 DEFAULT_REALITY_EN="${SAVED_REALITY_EN:-0}"
@@ -548,7 +550,6 @@ if [ "$REALITY_ENABLE" = "1" ]; then
         echo "✅ 已生成新的 Reality x25519 密钥对与 ShortID。"
     fi
 
-    # Reality 专属 VLESS Encryption 配置
     if [ -n "$SAVED_REALITY_DEC" ] && [ -n "$SAVED_REALITY_ENC" ] && [ "$SAVED_REALITY_DEC" != "none" ]; then
         REALITY_DEC="$SAVED_REALITY_DEC"
         REALITY_ENC="$SAVED_REALITY_ENC"
@@ -593,7 +594,7 @@ if [ "$REALITY_ENABLE" = "1" ]; then
 fi
 
 echo ""
-echo "=== 5. 写入优化后的 Xray 配置 (无切片满血版) ==="
+echo "=== 5. 写入优化后的 Xray 配置 (Argo: packet-up / Reality: stream-one) ==="
 
 EXTRA_INBOUNDS=""
 
@@ -636,7 +637,7 @@ if [ "$REALITY_ENABLE" = "1" ]; then
         \"network\": \"xhttp\",
         \"xhttpSettings\": {
           \"path\": \"${XHTTP_PATH}\",
-          \"mode\": \"auto\"
+          \"mode\": \"stream-one\"
         },
         \"security\": \"reality\",
         \"realitySettings\": {
@@ -664,7 +665,7 @@ cat << JSON > "${XRAY_CONF_DIR}/config.json"
     {
       "tag": "argo-xhttp-in",
       "listen": "127.0.0.1",
-      "port": 8080,
+      "port": ${ARGO_PORT},
       "protocol": "vless",
       "settings": {
         "clients": [
@@ -720,7 +721,6 @@ JSON
 
 echo "=== 6. 彻底物理清场旧进程并启动服务 (35M/30M + GOGC=20) ==="
 
-# 6.1 清理旧服务与状态锁
 if command -v rc-service >/dev/null 2>&1; then
     mkdir -p /run/openrc
     touch /run/openrc/softlevel
@@ -735,7 +735,6 @@ fi
 killall -9 cloudflared xray >/dev/null 2>&1 || true
 rm -f /run/xray.pid /run/cloudflared.pid /run/openrc/started/xray /run/openrc/started/cloudflared
 
-# 6.2 写入系统服务配置并尝试启动
 if [ "$OS" = "alpine" ] && command -v rc-service >/dev/null 2>&1; then
     mkdir -p /run/openrc
     touch /run/openrc/softlevel
@@ -761,7 +760,6 @@ stop_pre() {
 OPENRC_XRAY
     chmod +x /etc/init.d/xray
 
-    # 不加单引号，确保 ${CF_BIN} 与 ${CF_RUN_ARGS} 真实展开写入
     cat << OPENRC_CF > /etc/init.d/cloudflared
 #!/sbin/openrc-run
 name="cloudflared"
@@ -833,7 +831,6 @@ SYS_CF
     systemctl start cloudflared >/dev/null 2>&1 || true
 fi
 
-# 6.3 容器环境直接兜底拉起（过滤 Z 僵尸进程，若 OpenRC/Systemd 未拉起则直接 nohup 后台启动）
 sleep 2
 if ! is_alive "xray"; then
     GOMEMLIMIT=35MiB GOGC=20 nohup /usr/local/bin/xray run -c "${XRAY_CONF_DIR}/config.json" >/dev/null 2>&1 &
@@ -863,7 +860,6 @@ if [ "$TUNNEL_MODE" = "2" ]; then
 fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
-# 仅保留 xmux 多路复用优化的 extra 参数，移除了切片限制
 EXTRA_PARAM="&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A%224-8%22%2C%22cMaxReuseTimes%22%3A%2232-64%22%7D%7D"
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=${XRAY_ENCRYPTION}${FLOW_PARAM}&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
@@ -882,7 +878,7 @@ else
 fi
 
 if [ "$REALITY_ENABLE" = "1" ]; then
-    REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&path=${ENCODED_PATH}&mode=auto${EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
+    REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&path=${ENCODED_PATH}&mode=stream-one${EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
     printf "%s\n" "$REALITY_LINK" > "$REALITY_LINK_FILE"
 else
     rm -f "$REALITY_LINK_FILE"
@@ -900,7 +896,8 @@ echo "内存与GC策略     : Xray(35M) / Cloudflare(30M), GOGC=20"
 echo "共用 UUID        : ${UUID}"
 echo "共用 Path        : ${XHTTP_PATH}"
 echo "--------------------------------------------------"
-echo "【1. Argo XHTTP 节点】"
+echo "【1. Argo XHTTP 节点 (packet-up)】"
+echo "本地回环端口     : 127.0.0.1:${ARGO_PORT}"
 echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
 echo "连接地址 (优选)  : ${FINAL_ADDR}"
 echo "Encryption (enc) : ${ENC_STATUS}"
@@ -921,7 +918,7 @@ if [ "$REALITY_ENABLE" = "1" ]; then
     R_ENC_STATUS="none"
     [ "$REALITY_DEC" != "none" ] && R_ENC_STATUS="$(printf "%s" "$REALITY_DEC" | cut -c 1-36)..."
     echo "--------------------------------------------------"
-    echo "【3. XHTTP + ENC + Reality 直连节点】 (请确保防火墙放行 TCP ${REALITY_PORT})"
+    echo "【3. XHTTP + ENC + Reality 直连节点 (stream-one)】 (请确保防火墙放行 TCP ${REALITY_PORT})"
     echo "地址:端口        : ${SERVER_IP}:${REALITY_PORT}"
     echo "SNI              : ${REALITY_SNI}"
     echo "Public Key / SID : ${REALITY_PUB} / ${REALITY_SID}"
