@@ -129,15 +129,15 @@ if [ ! -f /usr/local/bin/xray ]; then
     mkdir -p /tmp/xray_argo /usr/local/bin
     curl -L "$XRAY_URL" -o /tmp/xray_argo/xray.zip
     unzip -o /tmp/xray_argo/xray.zip xray -d /usr/local/bin/
-    chmod +x /usr/local/bin/xray
     rm -rf /tmp/xray_argo
 fi
+[ -f /usr/local/bin/xray ] && chmod +x /usr/local/bin/xray
 
 if [ ! -f /usr/local/bin/cloudflared ] && ! command -v cloudflared >/dev/null 2>&1; then
     CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
     curl -L "$CF_URL" -o /usr/local/bin/cloudflared
-    chmod +x /usr/local/bin/cloudflared
 fi
+[ -f /usr/local/bin/cloudflared ] && chmod +x /usr/local/bin/cloudflared
 CF_BIN=$(command -v cloudflared || echo "/usr/local/bin/cloudflared")
 
 echo ""
