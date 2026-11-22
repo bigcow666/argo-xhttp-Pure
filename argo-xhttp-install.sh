@@ -240,6 +240,7 @@ printf "%s" "$TUNNEL_MODE" > "$MODE_FILE"
 
 # ---------------- 4.3 固定隧道域名与 Token ----------------
 if [ "$TUNNEL_MODE" = "1" ]; then
+    printf "💡 CF Tunnel 可自行前往 CF 官网设置 Token 及路由，或打开 \033[4;36mhttps://fscarmen.cloudflare.now.cc/\033[0m 获取 JSON Token\n"
     if [ -n "$SAVED_DOMAIN" ]; then
         echo "✅ 已锁定固定隧道域名: ${SAVED_DOMAIN}"
         printf "直接回车沿用 [${SAVED_DOMAIN}]，或输入新域名覆盖: "
