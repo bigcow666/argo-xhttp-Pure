@@ -6,19 +6,42 @@ INSTALL_URL="https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/ar
 PERSIST_DIR="/etc/argo-xhttp"
 XRAY_CONF="/usr/local/etc/xray/config.json"
 
-# 自动安装 xr 快捷命令（持久化）
-if [ ! -f /usr/local/bin/xr ]; then
+# 每次启动自动静默更新覆盖 /usr/local/bin/xr（带超时防卡死，有新版自动重载）
+if [ "${XR_UPDATED:-0}" != "1" ]; then
     mkdir -p /usr/local/bin
-    if command -v wget >/dev/null 2>&1; then
-        wget -qO /usr/local/bin/xr "$XR_URL" 2>/dev/null || true
-    elif command -v curl >/dev/null 2>&1; then
-        curl -sL "$XR_URL" -o /usr/local/bin/xr 2>/dev/null || true
+    TMP_XR="/usr/local/bin/xr.tmp"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 3 --max-time 5 "$XR_URL" -o "$TMP_XR" 2>/dev/null || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qT 5 -O "$TMP_XR" "$XR_URL" 2>/dev/null || true
     fi
-    [ -f /usr/local/bin/xr ] && chmod +x /usr/local/bin/xr
+    if [ -s "$TMP_XR" ] && grep -q "argo-xhttp-Pure" "$TMP_XR" 2>/dev/null; then
+        if [ ! -f /usr/local/bin/xr ] || ! cmp -s "$TMP_XR" /usr/local/bin/xr; then
+            mv -f "$TMP_XR" /usr/local/bin/xr
+            chmod +x /usr/local/bin/xr
+            XR_UPDATED=1 exec /usr/local/bin/xr
+        else
+            rm -f "$TMP_XR"
+        fi
+    else
+        rm -f "$TMP_XR"
+    fi
 fi
+
+# 退出时高亮提示快捷命令（无论选 0 退出还是 Ctrl+C 都会触发）
+trap 'printf "\n\033[1;32m💡 随时在终端输入 \033[1;33mxr\033[1;32m 即可再次打开本脚本设置！\033[0m\n\n"' EXIT
+trap 'exit 0' INT
 
 is_alive() {
     ps -eo stat,comm 2>/dev/null | awk -v p="$1" '$1 !~ /Z/ && $2 == p {found=1} END {exit !found}'
+}
+
+pause_return() {
+    echo ""
+    echo "--------------------------------------------------"
+    printf "按 [回车] 返回主菜单，或输入 [0] 退出: "
+    read -r NEXT_ACT < /dev/tty
+    [ "$NEXT_ACT" = "0" ] && exit 0
 }
 
 restart_xray() {
@@ -33,20 +56,28 @@ restart_xray() {
 }
 
 install_node() {
-    echo ""
+    clear 2>/dev/null || true
+    echo "=================================================="
+    echo "              [1] 安装 / 重新配置节点"
+    echo "=================================================="
+    if [ -f "$XRAY_CONF" ]; then
+        printf "⚠️ 检测到本机已安装节点，确认要重新运行安装脚本吗？[y/N] (回车取消): "
+        read -r INS_CONFIRM < /dev/tty
+        if [ "$INS_CONFIRM" != "y" ] && [ "$INS_CONFIRM" != "Y" ]; then
+            echo "已取消操作。"
+            return
+        fi
+    fi
+
     echo ">>> 正在拉取并运行原安装脚本..."
     if command -v wget >/dev/null 2>&1; then
         wget -qO- "$INSTALL_URL" | sh
     else
-        curl -sL "$INSTALL_URL" | sh
+        curl -fsSL "$INSTALL_URL" | sh
     fi
 }
 
-view_nodes() {
-    echo ""
-    echo "=================================================="
-    echo "                  当前节点信息"
-    echo "=================================================="
+show_links() {
     X_STAT="❌ 未运行"; is_alive "xray" && X_STAT="✅ 运行中"
     C_STAT="❌ 未运行"; is_alive "cloudflared" && C_STAT="✅ 运行中"
     echo "Xray 状态        : ${X_STAT}"
@@ -83,11 +114,21 @@ view_nodes() {
     if [ "$FOUND" -eq 0 ]; then
         echo "⚠️ 未找到节点链接文件，请先执行 [1] 安装节点。"
     fi
+}
+
+view_nodes() {
+    clear 2>/dev/null || true
     echo "=================================================="
+    echo "              [2] 当前节点链接与状态"
+    echo "=================================================="
+    show_links
 }
 
 change_uuid_path() {
-    echo ""
+    clear 2>/dev/null || true
+    echo "=================================================="
+    echo "             [3] 更换随机 UUID 和 Path"
+    echo "=================================================="
     if [ ! -f "$XRAY_CONF" ] || [ ! -f "${PERSIST_DIR}/uuid" ] || [ ! -f "${PERSIST_DIR}/path" ]; then
         echo "❌ 未检测到已安装的节点配置，请先执行 [1] 安装节点。"
         return
@@ -95,6 +136,16 @@ change_uuid_path() {
 
     OLD_UUID=$(cat "${PERSIST_DIR}/uuid")
     OLD_PATH=$(cat "${PERSIST_DIR}/path")
+    echo "当前 UUID : ${OLD_UUID}"
+    echo "当前 Path : ${OLD_PATH}"
+    echo "--------------------------------------------------"
+    printf "⚠️ 确认更换为新的随机 UUID 和 Path？（旧节点将失效）[y/N] (回车取消): "
+    read -r CHG_CONFIRM < /dev/tty
+    if [ "$CHG_CONFIRM" != "y" ] && [ "$CHG_CONFIRM" != "Y" ]; then
+        echo "已取消更换。"
+        return
+    fi
+
     NEW_UUID=$(/usr/local/bin/xray uuid)
     NEW_PATH="/$(openssl rand -hex 6)"
 
@@ -126,19 +177,22 @@ change_uuid_path() {
     restart_xray
     sleep 1
 
-    echo "✅ UUID 与 Path 已更换并重启 Xray 生效！"
-    echo "   新 UUID : ${NEW_UUID}"
-    echo "   新 Path : ${NEW_PATH}"
     echo ""
-    view_nodes
+    echo "✅ UUID 与 Path 已更换并重启 Xray 生效！"
+    echo "--------------------------------------------------"
+    show_links
 }
 
 uninstall_all() {
-    echo ""
+    clear 2>/dev/null || true
+    echo "=================================================="
+    echo "            [4] 卸载 Xray 和 cloudflared"
+    echo "=================================================="
     echo "请选择卸载方式："
     echo "  [1] 卸载全部程序，但保留固化配置与 Token，方便下次重装直接取用 (默认)"
     echo "  [2] 彻底全部卸载，连同保存的配置与 Token 一起删除"
-    echo "  [0] 取消卸载"
+    echo "  [0] 取消卸载，返回主菜单"
+    echo "--------------------------------------------------"
     printf "请输入序号 [0-2] (直接回车默认 [1]): "
     read -r UNINSTALL_CHOICE < /dev/tty
     UNINSTALL_CHOICE="${UNINSTALL_CHOICE:-1}"
@@ -184,7 +238,7 @@ uninstall_all() {
 }
 
 while true; do
-    echo ""
+    clear 2>/dev/null || true
     echo "=================================================="
     echo "          argo-xhttp-Pure 管理菜单"
     echo "  GitHub  : ${GITHUB_HOME}"
@@ -200,11 +254,14 @@ while true; do
     read -r MENU_CHOICE < /dev/tty
 
     case "$MENU_CHOICE" in
-        1) install_node ;;
-        2) view_nodes ;;
-        3) change_uuid_path ;;
-        4) uninstall_all ;;
+        1) install_node; pause_return ;;
+        2) view_nodes; pause_return ;;
+        3) change_uuid_path; pause_return ;;
+        4) uninstall_all; pause_return ;;
         0) exit 0 ;;
-        *) echo "❌ 无效输入，请输入 0-4。" ;;
+        *)
+            echo "❌ 无效输入，请输入 0-4。"
+            sleep 1
+            ;;
     esac
 done
