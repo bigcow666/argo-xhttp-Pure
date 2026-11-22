@@ -13,11 +13,11 @@
 
 **方式一：推荐（自动适配环境补装 `curl`，最稳定）**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/argo-xhttp-install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/xr.sh | sh
 ```
 **方式二：极简（直接使用系统自带 wget）**
 ```bash
-wget -qO- https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/argo-xhttp-install.sh | sh
+wget -qO- https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/xr.sh | sh
 ```
 说明
 Cloudflare Zero Trust 后台设置：
