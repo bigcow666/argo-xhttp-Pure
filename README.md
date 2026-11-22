@@ -11,11 +11,11 @@
 
 ### 一键安装命令
 
-**方式一：推荐（自动适配环境补装 `curl`，最稳定）**
+**方式一：复curl 需系统已安装 `curl`，最稳定）**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/xr.sh | sh
 ```
-**方式二：极简（直接使用系统自带 wget）**
+**方式二 推荐（直接使用系统自带 wget）**
 ```bash
 wget -qO- https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/xr.sh | sh
 ```
