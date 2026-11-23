@@ -25,3 +25,36 @@ Cloudflare Zero Trust 后台设置：
 ​Service Type 选择 HTTP，URL 填写 127.0.0.1:8080。
 
 推荐开启enc和vison flow
+
+#xhttp #心跳包
+
+垃圾线路设置 `maxConcurrency`，理解为限制每条管道里的线缆数量，但不限制管道数量。越低越好，防止单条管道堵塞导致管道内所有连接都连不上，影响多种 App。
+优点不会出现管道堵塞，因为不限制管道数量，缺点建立大量连接管道可能触发限流
+过CF
+```json
+{
+  "mode": "packet-up",
+  "xPaddingBytes": "100-1000",
+  "xmux": {
+    "maxConcurrency": "2-4",
+    "hMaxRequestTimes": "600-900",
+    "hMaxReusableSecs": "1800-3000",
+    "hKeepAlivePeriod": 30
+  }
+}
+```
+
+直连设置 `maxConnections`，越低越好，理解为限制连接管道总数。Chrome 浏览器不会建立太多管道，设置高了容易暴露特征。
+```json
+{
+  "mode": "auto",
+  "xPaddingBytes": "100-1000",
+  "xmux": {
+    "maxConnections": "1-3",
+    "hMaxRequestTimes": "600-900",
+    "hMaxReusableSecs": "1800-3000",
+    "hKeepAlivePeriod": 30
+  }
+}
+```
+
