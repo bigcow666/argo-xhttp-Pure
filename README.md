@@ -28,33 +28,36 @@ Cloudflare Zero Trust 后台设置：
 
 #xhttp #心跳包
 
-垃圾线路设置 `maxConcurrency`，理解为限制每条管道里的线缆数量，但不限制管道数量。越低越好，防止单条管道堵塞导致管道内所有连接都连不上，影响多种 App。
-优点不会出现管道堵塞，因为不限制管道数量，缺点建立大量连接管道可能触发限流
-过CF
+垃圾线路设置 maxConcurrency，理解为限制每条管道里的线缆数量，但不限制管道数量。越低越好，防止单条管道堵塞导致管道内所有连接都连不上，影响多种 App。
+
+过CF（模式选 packet-up）
 ```json
 {
-  "mode": "packet-up",
   "xPaddingBytes": "100-1000",
   "xmux": {
     "maxConcurrency": "2-4",
-    "hMaxRequestTimes": "600-900",
-    "hMaxReusableSecs": "1800-3000",
-    "hKeepAlivePeriod": 30
+    "hMaxRequestTimes": "100-200",
+    "hMaxReusableSecs": "30-60",
+    "hKeepAlivePeriod": 15
   }
 }
 ```
 
-直连设置 `maxConnections`，越低越好，理解为限制连接管道总数。Chrome 浏览器不会建立太多管道，设置高了容易暴露特征。
+直连设置 maxConnections，越低越好，理解为限制连接管道总数。Chrome 浏览器不会建立太多管道，设置高了容易暴露特征。（模式选 auto）
 ```json
 {
-  "mode": "auto",
   "xPaddingBytes": "100-1000",
   "xmux": {
     "maxConnections": "1-3",
-    "hMaxRequestTimes": "600-900",
-    "hMaxReusableSecs": "1800-3000",
-    "hKeepAlivePeriod": 30
+    "hMaxRequestTimes": "100-200",
+    "hMaxReusableSecs": "30-60",
+    "hKeepAlivePeriod": 15
   }
 }
 ```
 
+maxConcurrency 限制每条管道里的最大线缆数量，但不限制多少管道
+maxConnections 限制连接管道总数，但不限制每条管道里的线缆数量。
+hMaxRequestTimes 一条管道传输多少次关闭，手机网络适度偏低，防止切屏假死
+hMaxReusableSecs 一条管道多长时间过期，手机网络适度偏低，防止切屏假死
+hKeepAlivePeriod 心跳保活时间 过CF时 只能保活客户端到cf边缘节点
