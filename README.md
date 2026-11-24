@@ -57,7 +57,12 @@ Cloudflare Zero Trust 后台设置：
 ```
 
 maxConcurrency 限制每条管道里的最大线缆数量，但不限制多少管道
+
 maxConnections 限制连接管道总数，但不限制每条管道里的线缆数量。
+
 hMaxRequestTimes 一条管道传输多少次关闭，手机网络适度偏低，防止切屏假死
+
 hMaxReusableSecs 一条管道多长时间过期，手机网络适度偏低，防止切屏假死
+
 hKeepAlivePeriod 心跳保活时间 过CF时 只能保活客户端到cf边缘节点
+
