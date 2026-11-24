@@ -27,6 +27,7 @@ Cloudflare Zero Trust 后台设置：
 推荐开启enc和vison flow
 
 **#xhttp #心跳包**
+**xhttp extra 配置 粘贴下面代码到v2rayn xhttp节点的extra输入框**
 
 **垃圾线路设置 maxConcurrency**，理解为限制每条管道里的线缆数量，但不限制管道数量。越低越好，防止单条管道堵塞导致管道内所有连接都连不上，影响多种 App。
 
