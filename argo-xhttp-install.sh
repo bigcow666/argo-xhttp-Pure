@@ -1,5 +1,12 @@
 #!/bin/sh
 
+# ================= XPadding Obfs 自定义参数区 =================
+XPADDING_BYTES="100-1000"
+XPADDING_HEADER="Cow-App-Context"
+XPADDING_PLACEMENT="header"
+XPADDING_METHOD="tokenish"
+# ==============================================================
+
 # 固定持久化配置目录（所有参数独立文件存储，永不丢失）
 PERSIST_DIR="/etc/argo-xhttp"
 XRAY_CONF_DIR="/usr/local/etc/xray"
@@ -41,6 +48,26 @@ REALITY_LINK_FILE="${PERSIST_DIR}/reality.link"
 # 精准检测活跃进程（彻底排除 Z 状态的 <defunct> 僵尸进程干扰）
 is_alive() {
     ps -eo stat,comm 2>/dev/null | awk -v p="$1" '$1 !~ /Z/ && $2 == p {found=1} END {exit !found}'
+}
+
+# JSON 字符串 URL 编码（用于动态生成 extra 参数）
+url_encode() {
+    printf "%s" "$1" | sed \
+        -e 's/%/%25/g' \
+        -e 's/ /%20/g' \
+        -e 's/"/%22/g' \
+        -e 's/{/%7B/g' \
+        -e 's/}/%7D/g' \
+        -e 's/:/%3A/g' \
+        -e 's/,/%2C/g' \
+        -e 's/\[/%5B/g' \
+        -e 's/\]/%5D/g' \
+        -e 's/\//%2F/g' \
+        -e 's/+/%2B/g' \
+        -e 's/=/%3D/g' \
+        -e 's/&/%26/g' \
+        -e 's/?/%3F/g' \
+        -e 's/#/%23/g'
 }
 
 # 生成 VLESS Encryption 密钥对 (参数1: 外观模式 native/xorpub/random)
@@ -431,7 +458,7 @@ printf "%s" "$XRAY_FLOW" > "$FLOW_FILE"
 DEFAULT_OBFS_EN="${SAVED_OBFS_EN:-1}"
 echo ""
 if [ "$DEFAULT_OBFS_EN" = "1" ]; then
-    echo "当前已启用 Argo XPadding Obfs 混淆 (Header: Cow-App-Context / tokenish)"
+    echo "当前已启用 Argo XPadding Obfs 混淆 (${XPADDING_PLACEMENT}: ${XPADDING_HEADER} / ${XPADDING_METHOD})"
     printf "是否继续启用 XPadding Obfs？[Y/n] (直接回车保持启用): "
     read -r OBFS_CHOICE < /dev/tty
     if [ "$OBFS_CHOICE" = "n" ] || [ "$OBFS_CHOICE" = "N" ]; then
@@ -440,7 +467,7 @@ if [ "$DEFAULT_OBFS_EN" = "1" ]; then
         OBFS_ENABLE="1"
     fi
 else
-    printf "是否开启 Argo XPadding Obfs 混淆 (Header 模式)？[y/N] (直接回车关闭): "
+    printf "是否开启 Argo XPadding Obfs 混淆 (${XPADDING_PLACEMENT}: ${XPADDING_HEADER})？[y/N] (直接回车关闭): "
     read -r OBFS_CHOICE < /dev/tty
     if [ "$OBFS_CHOICE" = "y" ] || [ "$OBFS_CHOICE" = "Y" ]; then
         OBFS_ENABLE="1"
@@ -453,9 +480,9 @@ printf "%s" "$OBFS_ENABLE" > "$OBFS_EN_FILE"
 if [ "$OBFS_ENABLE" = "1" ]; then
     ARGO_OBFS_JSON=",
           \"xPaddingObfsMode\": true,
-          \"xPaddingHeader\": \"Cow-App-Context\",
-          \"xPaddingPlacement\": \"header\",
-          \"xPaddingMethod\": \"tokenish\""
+          \"xPaddingHeader\": \"${XPADDING_HEADER}\",
+          \"xPaddingPlacement\": \"${XPADDING_PLACEMENT}\",
+          \"xPaddingMethod\": \"${XPADDING_METHOD}\""
 else
     ARGO_OBFS_JSON=""
 fi
@@ -755,7 +782,7 @@ ${CLIENT_JSON}
         "xhttpSettings": {
           "path": "${XHTTP_PATH}",
           "mode": "packet-up",
-          "xPaddingBytes": "100-1000"${ARGO_OBFS_JSON}
+          "xPaddingBytes": "${XPADDING_BYTES}"${ARGO_OBFS_JSON}
         },
         "security": "none",
         "sockopt": {
@@ -929,12 +956,13 @@ fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
 if [ "$OBFS_ENABLE" = "1" ]; then
-    EXTRA_PARAM="&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%2C%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingHeader%22%3A%22Cow-App-Context%22%2C%22xPaddingPlacement%22%3A%22header%22%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%222-4%22%2C%22hMaxRequestTimes%22%3A%22100-200%22%2C%22hMaxReusableSecs%22%3A%2230-60%22%2C%22hKeepAlivePeriod%22%3A15%7D%7D"
-    OBFS_STATUS="开启 (header / Cow-App-Context / tokenish)"
+    EXTRA_JSON="{\"xPaddingBytes\":\"${XPADDING_BYTES}\",\"xPaddingObfsMode\":true,\"xPaddingHeader\":\"${XPADDING_HEADER}\",\"xPaddingPlacement\":\"${XPADDING_PLACEMENT}\",\"xPaddingMethod\":\"${XPADDING_METHOD}\",\"xmux\":{\"maxConnections\":\"1-3\",\"hMaxRequestTimes\":\"100-200\",\"hMaxReusableSecs\":\"30-60\",\"hKeepAlivePeriod\":15}}"
+    OBFS_STATUS="开启 (${XPADDING_PLACEMENT} / ${XPADDING_HEADER} / ${XPADDING_METHOD})"
 else
-    EXTRA_PARAM="&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%222-4%22%2C%22hMaxRequestTimes%22%3A%22100-200%22%2C%22hMaxReusableSecs%22%3A%2230-60%22%2C%22hKeepAlivePeriod%22%3A15%7D%7D"
+    EXTRA_JSON="{\"xPaddingBytes\":\"${XPADDING_BYTES}\",\"xmux\":{\"maxConcurrency\":\"2-4\",\"hMaxRequestTimes\":\"100-200\",\"hMaxReusableSecs\":\"30-60\",\"hKeepAlivePeriod\":15}}"
     OBFS_STATUS="关闭 (默认 xPaddingBytes)"
 fi
+EXTRA_PARAM="&extra=$(url_encode "$EXTRA_JSON")"
 
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=${XRAY_ENCRYPTION}${FLOW_PARAM}&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
@@ -953,7 +981,8 @@ else
 fi
 
 if [ "$REALITY_ENABLE" = "1" ]; then
-    REALITY_EXTRA_PARAM="&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%7D"
+    REALITY_EXTRA_JSON="{\"xPaddingBytes\":\"${XPADDING_BYTES}\"}"
+    REALITY_EXTRA_PARAM="&extra=$(url_encode "$REALITY_EXTRA_JSON")"
     REALITY_LINK="vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=${REALITY_ENC}${REALITY_FLOW_PARAM}&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&type=xhttp&host=${REALITY_SNI}&path=${ENCODED_PATH}&mode=auto${REALITY_EXTRA_PARAM}#Reality-XHTTP-${REALITY_PORT}"
     printf "%s\n" "$REALITY_LINK" > "$REALITY_LINK_FILE"
 else
@@ -979,6 +1008,7 @@ echo "连接地址 (优选)  : ${FINAL_ADDR}"
 echo "Encryption (enc) : ${ENC_STATUS}"
 echo "Flow (流控)      : ${XRAY_FLOW:-none}"
 echo "XPadding Obfs    : ${OBFS_STATUS}"
+printf "\033[1;33m⚠️  重要提示：如果您更改了 XPadding Obfs 选项，必须重新导入下方节点链接才能生效！\033[0m\n"
 echo ""
 echo "${VLESS_LINK}"
 
