@@ -1,5 +1,12 @@
 #!/bin/sh
 
+# ================= XPadding Obfs 自定义参数区 =================
+XPADDING_BYTES="100-1000"
+XPADDING_HEADER="Cow-App-Context"
+XPADDING_PLACEMENT="header"
+XPADDING_METHOD="tokenish"
+# ==============================================================
+
 GITHUB_HOME="https://github.com/bigcow666"
 XR_URL="https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/xr.sh"
 INSTALL_URL="https://raw.githubusercontent.com/bigcow666/argo-xhttp-Pure/main/argo-xhttp-install.sh"
@@ -36,6 +43,25 @@ is_alive() {
     ps -eo stat,comm 2>/dev/null | awk -v p="$1" '$1 !~ /Z/ && $2 == p {found=1} END {exit !found}'
 }
 
+url_encode() {
+    printf "%s" "$1" | sed \
+        -e 's/%/%25/g' \
+        -e 's/ /%20/g' \
+        -e 's/"/%22/g' \
+        -e 's/{/%7B/g' \
+        -e 's/}/%7D/g' \
+        -e 's/:/%3A/g' \
+        -e 's/,/%2C/g' \
+        -e 's/\[/%5B/g' \
+        -e 's/\]/%5D/g' \
+        -e 's/\//%2F/g' \
+        -e 's/+/%2B/g' \
+        -e 's/=/%3D/g' \
+        -e 's/&/%26/g' \
+        -e 's/?/%3F/g' \
+        -e 's/#/%23/g'
+}
+
 pause_return() {
     echo ""
     echo "--------------------------------------------------"
@@ -52,6 +78,16 @@ restart_xray() {
     else
         killall -9 xray >/dev/null 2>&1 || true
         GOMEMLIMIT=35MiB GOGC=20 nohup /usr/local/bin/xray run -c "$XRAY_CONF" >/dev/null 2>&1 &
+    fi
+}
+
+get_obfs_state() {
+    if [ -f "${PERSIST_DIR}/obfs_enable" ]; then
+        cat "${PERSIST_DIR}/obfs_enable"
+    elif [ -f "$XRAY_CONF" ] && grep -q '"xPaddingObfsMode": true' "$XRAY_CONF" 2>/dev/null; then
+        echo "1"
+    else
+        echo "0"
     fi
 }
 
@@ -80,8 +116,16 @@ install_node() {
 show_links() {
     X_STAT="❌ 未运行"; is_alive "xray" && X_STAT="✅ 运行中"
     C_STAT="❌ 未运行"; is_alive "cloudflared" && C_STAT="✅ 运行中"
+    OBFS_CUR=$(get_obfs_state)
+    if [ "$OBFS_CUR" = "1" ]; then
+        OBFS_TXT="开启 (${XPADDING_PLACEMENT} / ${XPADDING_HEADER} / ${XPADDING_METHOD})"
+    else
+        OBFS_TXT="关闭 (默认 xPaddingBytes)"
+    fi
+
     echo "Xray 状态        : ${X_STAT}"
     echo "Cloudflared 状态 : ${C_STAT}"
+    echo "XPadding Obfs    : ${OBFS_TXT}"
 
     if [ -f "${PERSIST_DIR}/uuid" ]; then
         echo "当前 UUID        : $(cat "${PERSIST_DIR}/uuid")"
@@ -183,10 +227,94 @@ change_uuid_path() {
     show_links
 }
 
+toggle_obfs() {
+    clear 2>/dev/null || true
+    echo "=================================================="
+    echo "        [4] 切换 Argo XPadding Obfs 开关"
+    echo "=================================================="
+    if [ ! -f "$XRAY_CONF" ] || [ ! -f "${PERSIST_DIR}/vless.link" ]; then
+        echo "❌ 未检测到已安装的节点配置，请先执行 [1] 安装节点。"
+        return
+    fi
+
+    CUR_OBFS=$(get_obfs_state)
+    if [ "$CUR_OBFS" = "1" ]; then
+        echo "当前状态: ✅ 已开启 (${XPADDING_PLACEMENT} / ${XPADDING_HEADER} / ${XPADDING_METHOD})"
+    else
+        echo "当前状态: ⚪ 已关闭 (默认 xPaddingBytes)"
+    fi
+    echo "--------------------------------------------------"
+    echo "  [1] 开启 XPadding Obfs (${XPADDING_PLACEMENT}: ${XPADDING_HEADER} + maxConnections: 1-3)"
+    echo "  [2] 关闭 XPadding Obfs (恢复默认 + maxConcurrency: 2-4)"
+    echo "  [0] 取消并返回"
+    echo "--------------------------------------------------"
+    printf "请选择 [0-2]: "
+    read -r OBFS_OPT < /dev/tty
+
+    case "$OBFS_OPT" in
+        1) NEW_OBFS="1" ;;
+        2) NEW_OBFS="0" ;;
+        0|"")
+            echo "已取消操作。"
+            return
+            ;;
+        *)
+            echo "❌ 无效输入，已取消操作。"
+            return
+            ;;
+    esac
+
+    # 1. 更新持久化状态
+    mkdir -p "$PERSIST_DIR"
+    printf "%s" "$NEW_OBFS" > "${PERSIST_DIR}/obfs_enable"
+
+    # 2. 更新 Xray 配置文件中的 argo-xhttp-in 混淆字段
+    TMP_CONF="${XRAY_CONF}.tmp"
+    awk -v enable="$NEW_OBFS" \
+        -v bytes="$XPADDING_BYTES" \
+        -v header="$XPADDING_HEADER" \
+        -v placement="$XPADDING_PLACEMENT" \
+        -v method="$XPADDING_METHOD" '
+        /"xPaddingObfsMode":|"xPaddingKey":|"xPaddingHeader":|"xPaddingPlacement":|"xPaddingMethod":/ { next }
+        /"xPaddingBytes":/ {
+            if (enable == "1") {
+                printf "          \"xPaddingBytes\": \"%s\",\n", bytes
+                printf "          \"xPaddingObfsMode\": true,\n"
+                printf "          \"xPaddingHeader\": \"%s\",\n", header
+                printf "          \"xPaddingPlacement\": \"%s\",\n", placement
+                printf "          \"xPaddingMethod\": \"%s\"\n", method
+            } else {
+                printf "          \"xPaddingBytes\": \"%s\"\n", bytes
+            }
+            next
+        }
+        { print }
+    ' "$XRAY_CONF" > "$TMP_CONF" && mv -f "$TMP_CONF" "$XRAY_CONF"
+
+    # 3. 动态编码并更新 vless.link 中的 extra 参数
+    if [ "$NEW_OBFS" = "1" ]; then
+        EXTRA_JSON="{\"xPaddingBytes\":\"${XPADDING_BYTES}\",\"xPaddingObfsMode\":true,\"xPaddingHeader\":\"${XPADDING_HEADER}\",\"xPaddingPlacement\":\"${XPADDING_PLACEMENT}\",\"xPaddingMethod\":\"${XPADDING_METHOD}\",\"xmux\":{\"maxConnections\":\"1-3\",\"hMaxRequestTimes\":\"100-200\",\"hMaxReusableSecs\":\"30-60\",\"hKeepAlivePeriod\":15}}"
+    else
+        EXTRA_JSON="{\"xPaddingBytes\":\"${XPADDING_BYTES}\",\"xmux\":{\"maxConcurrency\":\"2-4\",\"hMaxRequestTimes\":\"100-200\",\"hMaxReusableSecs\":\"30-60\",\"hKeepAlivePeriod\":15}}"
+    fi
+    ENC_EXTRA=$(url_encode "$EXTRA_JSON")
+    sed -i "s|extra=[^#]*|extra=${ENC_EXTRA}|g" "${PERSIST_DIR}/vless.link"
+
+    # 4. 重启 Xray 生效
+    restart_xray
+    sleep 1
+
+    echo ""
+    echo "✅ XPadding Obfs 状态已更新并重启 Xray 生效！"
+    printf "\033[1;33m⚠️  重要提示：您已更改 XPadding Obfs 选项，必须重新导入下方节点链接才能生效！\033[0m\n"
+    echo "--------------------------------------------------"
+    show_links
+}
+
 uninstall_all() {
     clear 2>/dev/null || true
     echo "=================================================="
-    echo "            [4] 卸载 Xray 和 cloudflared"
+    echo "            [5] 卸载 Xray 和 cloudflared"
     echo "=================================================="
     echo "请选择卸载方式："
     echo "  [1] 卸载全部程序，但保留固化配置与 Token，方便下次重装直接取用 (默认)"
@@ -247,20 +375,22 @@ while true; do
     echo "  1. 安装 / 重新配置节点"
     echo "  2. 查看节点链接与状态"
     echo "  3. 更换随机 UUID 和 Path"
-    echo "  4. 卸载 Xray 和 cloudflared"
+    echo "  4. 切换 Argo XPadding Obfs 开关"
+    echo "  5. 卸载 Xray 和 cloudflared"
     echo "  0. 退出"
     echo "=================================================="
-    printf "请输入序号 [0-4]: "
+    printf "请输入序号 [0-5]: "
     read -r MENU_CHOICE < /dev/tty
 
     case "$MENU_CHOICE" in
         1) install_node; pause_return ;;
         2) view_nodes; pause_return ;;
         3) change_uuid_path; pause_return ;;
-        4) uninstall_all; pause_return ;;
+        4) toggle_obfs; pause_return ;;
+        5) uninstall_all; pause_return ;;
         0) exit 0 ;;
         *)
-            echo "❌ 无效输入，请输入 0-4。"
+            echo "❌ 无效输入，请输入 0-5。"
             sleep 1
             ;;
     esac
