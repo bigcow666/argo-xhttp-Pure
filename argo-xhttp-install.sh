@@ -16,6 +16,7 @@ ADDR_FILE="${PERSIST_DIR}/addr"
 DEC_FILE="${PERSIST_DIR}/decryption"
 ENC_FILE="${PERSIST_DIR}/encryption"
 FLOW_FILE="${PERSIST_DIR}/flow"
+OBFS_EN_FILE="${PERSIST_DIR}/obfs_enable"
 LINK_FILE="${PERSIST_DIR}/vless.link"
 
 # SOCKS5 持久化文件
@@ -177,6 +178,7 @@ SAVED_ADDR=$(cat "$ADDR_FILE" 2>/dev/null || true)
 SAVED_DEC=$(cat "$DEC_FILE" 2>/dev/null || true)
 SAVED_ENC=$(cat "$ENC_FILE" 2>/dev/null || true)
 SAVED_FLOW=$(cat "$FLOW_FILE" 2>/dev/null || true)
+SAVED_OBFS_EN=$(cat "$OBFS_EN_FILE" 2>/dev/null || true)
 
 SAVED_SOCKS_EN=$(cat "$SOCKS_EN_FILE" 2>/dev/null || true)
 SAVED_SOCKS_PORT=$(cat "$SOCKS_PORT_FILE" 2>/dev/null || true)
@@ -332,9 +334,9 @@ case "$OPT_CHOICE" in
 esac
 printf "%s" "$ADDR" > "$ADDR_FILE"
 
-# ---------------- 4.5 Argo VLESS Encryption 与 Flow (可选并持久化) ----------------
+# ---------------- 4.5 Argo VLESS Encryption、Flow 与 Obfs 配置 ----------------
 echo ""
-echo "=== 4.5 Argo VLESS Encryption (enc) 与 Flow 配置 ==="
+echo "=== 4.5 Argo VLESS Encryption (enc)、Flow 与 Obfs 配置 ==="
 XRAY_DECRYPTION="none"
 XRAY_ENCRYPTION="none"
 NEED_GEN_ENC="0"
@@ -424,6 +426,39 @@ else
     XRAY_FLOW=""
 fi
 printf "%s" "$XRAY_FLOW" > "$FLOW_FILE"
+
+# Argo xPaddingObfsMode (Header 混淆) 开关
+DEFAULT_OBFS_EN="${SAVED_OBFS_EN:-1}"
+echo ""
+if [ "$DEFAULT_OBFS_EN" = "1" ]; then
+    echo "当前已启用 Argo XPadding Obfs 混淆 (Header: Cow-App-Context / tokenish)"
+    printf "是否继续启用 XPadding Obfs？[Y/n] (直接回车保持启用): "
+    read -r OBFS_CHOICE < /dev/tty
+    if [ "$OBFS_CHOICE" = "n" ] || [ "$OBFS_CHOICE" = "N" ]; then
+        OBFS_ENABLE="0"
+    else
+        OBFS_ENABLE="1"
+    fi
+else
+    printf "是否开启 Argo XPadding Obfs 混淆 (Header 模式)？[y/N] (直接回车关闭): "
+    read -r OBFS_CHOICE < /dev/tty
+    if [ "$OBFS_CHOICE" = "y" ] || [ "$OBFS_CHOICE" = "Y" ]; then
+        OBFS_ENABLE="1"
+    else
+        OBFS_ENABLE="0"
+    fi
+fi
+printf "%s" "$OBFS_ENABLE" > "$OBFS_EN_FILE"
+
+if [ "$OBFS_ENABLE" = "1" ]; then
+    ARGO_OBFS_JSON=",
+          \"xPaddingObfsMode\": true,
+          \"xPaddingHeader\": \"Cow-App-Context\",
+          \"xPaddingPlacement\": \"header\",
+          \"xPaddingMethod\": \"tokenish\""
+else
+    ARGO_OBFS_JSON=""
+fi
 
 if [ -n "$XRAY_FLOW" ]; then
     CLIENT_JSON="          {
@@ -719,7 +754,8 @@ ${CLIENT_JSON}
         "network": "xhttp",
         "xhttpSettings": {
           "path": "${XHTTP_PATH}",
-          "mode": "packet-up"
+          "mode": "packet-up",
+          "xPaddingBytes": "100-1000"${ARGO_OBFS_JSON}
         },
         "security": "none",
         "sockopt": {
@@ -892,7 +928,14 @@ if [ "$TUNNEL_MODE" = "2" ]; then
 fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
-EXTRA_PARAM="&extra=%7B%22mode%22%3A%22packet-up%22%2C%22xPaddingBytes%22%3A%22100-1000%22%7D"
+if [ "$OBFS_ENABLE" = "1" ]; then
+    EXTRA_PARAM="&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%2C%22xPaddingObfsMode%22%3Atrue%2C%22xPaddingHeader%22%3A%22Cow-App-Context%22%2C%22xPaddingPlacement%22%3A%22header%22%2C%22xPaddingMethod%22%3A%22tokenish%22%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%222-4%22%2C%22hMaxRequestTimes%22%3A%22100-200%22%2C%22hMaxReusableSecs%22%3A%2230-60%22%2C%22hKeepAlivePeriod%22%3A15%7D%7D"
+    OBFS_STATUS="开启 (header / Cow-App-Context / tokenish)"
+else
+    EXTRA_PARAM="&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%222-4%22%2C%22hMaxRequestTimes%22%3A%22100-200%22%2C%22hMaxReusableSecs%22%3A%2230-60%22%2C%22hKeepAlivePeriod%22%3A15%7D%7D"
+    OBFS_STATUS="关闭 (默认 xPaddingBytes)"
+fi
+
 VLESS_LINK="vless://${UUID}@${FINAL_ADDR}:443?encryption=${XRAY_ENCRYPTION}${FLOW_PARAM}&security=tls&sni=${CF_DOMAIN}&fp=chrome&alpn=h2&type=xhttp&host=${CF_DOMAIN}&path=${ENCODED_PATH}&mode=packet-up${EXTRA_PARAM}#Argo-XHTTP-${CF_DOMAIN}"
 printf "%s\n" "$VLESS_LINK" > "$LINK_FILE"
 
@@ -935,6 +978,7 @@ echo "隧道域名 (SNI)   : ${CF_DOMAIN}"
 echo "连接地址 (优选)  : ${FINAL_ADDR}"
 echo "Encryption (enc) : ${ENC_STATUS}"
 echo "Flow (流控)      : ${XRAY_FLOW:-none}"
+echo "XPadding Obfs    : ${OBFS_STATUS}"
 echo ""
 echo "${VLESS_LINK}"
 
