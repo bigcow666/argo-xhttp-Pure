@@ -28,10 +28,22 @@ Cloudflare Zero Trust 后台设置：
 
 **#xhttp #心跳包**
 **xhttp extra 配置 粘贴下面代码到v2rayn xhttp节点的extra输入框**
+#xhttp #心跳包 #obfs
+**开启xPaddingObfsMode时
+限制maxConnections （默认）**
+```json
+{"xPaddingBytes":"100-1000","xPaddingObfsMode":true,"xPaddingHeader":"Cow-App-Context","xPaddingPlacement":"header","xPaddingMethod":"tokenish","xmux":{"maxConnections": "1-3","hMaxRequestTimes":"100-200","hMaxReusableSecs":"30-60","hKeepAlivePeriod":15}}```
+
+限制maxConcurrency （备用）
+```json
+{"xPaddingBytes":"100-1000","xPaddingObfsMode":true,"xPaddingHeader":"Cow-App-Context","xPaddingPlacement":"header","xPaddingMethod":"tokenish","xmux":{"maxConcurrency": "2-4","hMaxRequestTimes":"100-200","hMaxReusableSecs":"30-60","hKeepAlivePeriod":15}}```
+
+
+**关闭obfs时**
 
 **垃圾线路设置 maxConcurrency**，理解为限制每条管道里的线缆数量，但不限制管道数量。越低越好，防止单条管道堵塞导致管道内所有连接都连不上，影响多种 App。
 
-**过CF（模式选 packet-up）**
+**过CF（模式选 packet-up）默认**
 ```json
 {
   "xPaddingBytes": "100-1000",
