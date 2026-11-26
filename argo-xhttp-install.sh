@@ -1,11 +1,12 @@
 #!/bin/sh
 
-# ================= XPadding Obfs 自定义参数区 =================
-XPADDING_BYTES="100-1000"
-XPADDING_HEADER="Cow-App-Context"
-XPADDING_PLACEMENT="header"
-XPADDING_METHOD="tokenish"
-# ==============================================================
+# ================= XPadding Obfs 默认参数区 =================
+DEFAULT_XPADDING_BYTES="100-1000"
+DEFAULT_XPADDING_PLACEMENT="header"
+DEFAULT_XPADDING_HEADER="Cow-App-Context"
+DEFAULT_XPADDING_KEY="cow_utm_content"
+DEFAULT_XPADDING_METHOD="tokenish"
+# ============================================================
 
 # 固定持久化配置目录（所有参数独立文件存储，永不丢失）
 PERSIST_DIR="/etc/argo-xhttp"
@@ -23,7 +24,8 @@ ADDR_FILE="${PERSIST_DIR}/addr"
 DEC_FILE="${PERSIST_DIR}/decryption"
 ENC_FILE="${PERSIST_DIR}/encryption"
 FLOW_FILE="${PERSIST_DIR}/flow"
-OBFS_EN_FILE="${PERSIST_DIR}/obfs_enable"
+OBFS_CONF_FILE="${PERSIST_DIR}/obfs.conf"
+OBFS_EN_LEGACY="${PERSIST_DIR}/obfs_enable"
 LINK_FILE="${PERSIST_DIR}/vless.link"
 
 # SOCKS5 持久化文件
@@ -68,6 +70,42 @@ url_encode() {
         -e 's/&/%26/g' \
         -e 's/?/%3F/g' \
         -e 's/#/%23/g'
+}
+
+# 读取共享 Obfs 持久化配置（无则回退脚本顶部默认值）
+load_obfs_conf() {
+    OBFS_ENABLE="1"
+    XPADDING_BYTES="$DEFAULT_XPADDING_BYTES"
+    XPADDING_PLACEMENT="$DEFAULT_XPADDING_PLACEMENT"
+    XPADDING_HEADER="$DEFAULT_XPADDING_HEADER"
+    XPADDING_KEY="$DEFAULT_XPADDING_KEY"
+    XPADDING_METHOD="$DEFAULT_XPADDING_METHOD"
+
+    if [ -f "$OBFS_CONF_FILE" ]; then
+        . "$OBFS_CONF_FILE"
+    elif [ -f "$OBFS_EN_LEGACY" ]; then
+        OBFS_ENABLE=$(cat "$OBFS_EN_LEGACY" 2>/dev/null || echo "1")
+    fi
+
+    [ -z "$OBFS_ENABLE" ] && OBFS_ENABLE="1"
+    [ -z "$XPADDING_BYTES" ] && XPADDING_BYTES="$DEFAULT_XPADDING_BYTES"
+    [ -z "$XPADDING_PLACEMENT" ] && XPADDING_PLACEMENT="$DEFAULT_XPADDING_PLACEMENT"
+    [ -z "$XPADDING_HEADER" ] && XPADDING_HEADER="$DEFAULT_XPADDING_HEADER"
+    [ -z "$XPADDING_KEY" ] && XPADDING_KEY="$DEFAULT_XPADDING_KEY"
+    [ -z "$XPADDING_METHOD" ] && XPADDING_METHOD="$DEFAULT_XPADDING_METHOD"
+}
+
+# 保存共享 Obfs 持久化配置（供安装脚本与 xr.sh 共用）
+save_obfs_conf() {
+    cat << OBFS_EOF > "$OBFS_CONF_FILE"
+OBFS_ENABLE="${OBFS_ENABLE}"
+XPADDING_BYTES="${XPADDING_BYTES}"
+XPADDING_PLACEMENT="${XPADDING_PLACEMENT}"
+XPADDING_HEADER="${XPADDING_HEADER}"
+XPADDING_KEY="${XPADDING_KEY}"
+XPADDING_METHOD="${XPADDING_METHOD}"
+OBFS_EOF
+    rm -f "$OBFS_EN_LEGACY"
 }
 
 # 生成 VLESS Encryption 密钥对 (参数1: 外观模式 native/xorpub/random)
@@ -205,7 +243,7 @@ SAVED_ADDR=$(cat "$ADDR_FILE" 2>/dev/null || true)
 SAVED_DEC=$(cat "$DEC_FILE" 2>/dev/null || true)
 SAVED_ENC=$(cat "$ENC_FILE" 2>/dev/null || true)
 SAVED_FLOW=$(cat "$FLOW_FILE" 2>/dev/null || true)
-SAVED_OBFS_EN=$(cat "$OBFS_EN_FILE" 2>/dev/null || true)
+load_obfs_conf
 
 SAVED_SOCKS_EN=$(cat "$SOCKS_EN_FILE" 2>/dev/null || true)
 SAVED_SOCKS_PORT=$(cat "$SOCKS_PORT_FILE" 2>/dev/null || true)
@@ -454,37 +492,91 @@ else
 fi
 printf "%s" "$XRAY_FLOW" > "$FLOW_FILE"
 
-# Argo xPaddingObfsMode (Header 混淆) 开关
-DEFAULT_OBFS_EN="${SAVED_OBFS_EN:-1}"
+# Argo XPadding Obfs 配置（持久化至 /etc/argo-xhttp/obfs.conf）
 echo ""
-if [ "$DEFAULT_OBFS_EN" = "1" ]; then
-    echo "当前已启用 Argo XPadding Obfs 混淆 (${XPADDING_PLACEMENT}: ${XPADDING_HEADER} / ${XPADDING_METHOD})"
-    printf "是否继续启用 XPadding Obfs？[Y/n] (直接回车保持启用): "
-    read -r OBFS_CHOICE < /dev/tty
-    if [ "$OBFS_CHOICE" = "n" ] || [ "$OBFS_CHOICE" = "N" ]; then
-        OBFS_ENABLE="0"
-    else
-        OBFS_ENABLE="1"
-    fi
+if [ "$XPADDING_PLACEMENT" = "cookie" ] || [ "$XPADDING_PLACEMENT" = "query" ]; then
+    CUR_OBFS_DETAIL="${XPADDING_PLACEMENT} / key=${XPADDING_KEY} / ${XPADDING_METHOD} / bytes=${XPADDING_BYTES}"
 else
-    printf "是否开启 Argo XPadding Obfs 混淆 (${XPADDING_PLACEMENT}: ${XPADDING_HEADER})？[y/N] (直接回车关闭): "
-    read -r OBFS_CHOICE < /dev/tty
-    if [ "$OBFS_CHOICE" = "y" ] || [ "$OBFS_CHOICE" = "Y" ]; then
-        OBFS_ENABLE="1"
-    else
-        OBFS_ENABLE="0"
-    fi
+    CUR_OBFS_DETAIL="${XPADDING_PLACEMENT} / header=${XPADDING_HEADER} / ${XPADDING_METHOD} / bytes=${XPADDING_BYTES}"
 fi
-printf "%s" "$OBFS_ENABLE" > "$OBFS_EN_FILE"
+echo "当前已保存 Obfs 参数: ${CUR_OBFS_DETAIL} (上次状态: $([ "$OBFS_ENABLE" = "1" ] && echo "开启" || echo "关闭"))"
+echo "请选择 Argo XPadding Obfs 选项："
+echo "  [1] 开启并使用已有配置 (默认)"
+echo "  [2] 开启并恢复默认参数 (${DEFAULT_XPADDING_PLACEMENT} / ${DEFAULT_XPADDING_HEADER} / ${DEFAULT_XPADDING_METHOD})"
+echo "  [3] 开启并使用自定义修改参数"
+echo "  [4] 关闭 Obfs (恢复默认 xPaddingBytes + maxConcurrency: 2-4)"
+printf "请选择 [1-4] (直接回车默认 [1]): "
+read -r OBFS_MENU_CHOICE < /dev/tty
+OBFS_MENU_CHOICE="${OBFS_MENU_CHOICE:-1}"
+
+case "$OBFS_MENU_CHOICE" in
+    2)
+        OBFS_ENABLE="1"
+        XPADDING_BYTES="$DEFAULT_XPADDING_BYTES"
+        XPADDING_PLACEMENT="$DEFAULT_XPADDING_PLACEMENT"
+        XPADDING_HEADER="$DEFAULT_XPADDING_HEADER"
+        XPADDING_KEY="$DEFAULT_XPADDING_KEY"
+        XPADDING_METHOD="$DEFAULT_XPADDING_METHOD"
+        echo "✅ 已开启 Obfs 并恢复为默认参数。"
+        ;;
+    3)
+        OBFS_ENABLE="1"
+        printf "请输入 xPaddingBytes (直接回车沿用 [${XPADDING_BYTES}]): "
+        read -r IN_OBFS_BYTES < /dev/tty
+        [ -n "$IN_OBFS_BYTES" ] && XPADDING_BYTES="$IN_OBFS_BYTES"
+
+        printf "请输入 xPaddingPlacement [header/cookie/query] (直接回车沿用 [${XPADDING_PLACEMENT}]): "
+        read -r IN_OBFS_PLACE < /dev/tty
+        [ -n "$IN_OBFS_PLACE" ] && XPADDING_PLACEMENT="$IN_OBFS_PLACE"
+
+        if [ "$XPADDING_PLACEMENT" = "cookie" ] || [ "$XPADDING_PLACEMENT" = "query" ]; then
+            printf "请输入 xPaddingKey (直接回车沿用 [${XPADDING_KEY}]): "
+            read -r IN_OBFS_KEY < /dev/tty
+            [ -n "$IN_OBFS_KEY" ] && XPADDING_KEY="$IN_OBFS_KEY"
+        else
+            printf "请输入 xPaddingHeader (直接回车沿用 [${XPADDING_HEADER}]): "
+            read -r IN_OBFS_HDR < /dev/tty
+            [ -n "$IN_OBFS_HDR" ] && XPADDING_HEADER="$IN_OBFS_HDR"
+        fi
+
+        printf "请输入 xPaddingMethod [tokenish/repeat-x] (直接回车沿用 [${XPADDING_METHOD}]): "
+        read -r IN_OBFS_METH < /dev/tty
+        [ -n "$IN_OBFS_METH" ] && XPADDING_METHOD="$IN_OBFS_METH"
+
+        echo "✅ 已开启 Obfs 并应用自定义参数。"
+        ;;
+    4)
+        OBFS_ENABLE="0"
+        echo "🔄 已关闭 Argo XPadding Obfs。"
+        ;;
+    *)
+        OBFS_ENABLE="1"
+        echo "✅ 已开启 Obfs 并沿用已有配置。"
+        ;;
+esac
+save_obfs_conf
 
 if [ "$OBFS_ENABLE" = "1" ]; then
-    ARGO_OBFS_JSON=",
+    if [ "$XPADDING_PLACEMENT" = "cookie" ] || [ "$XPADDING_PLACEMENT" = "query" ]; then
+        ARGO_OBFS_JSON=",
+          \"xPaddingObfsMode\": true,
+          \"xPaddingKey\": \"${XPADDING_KEY}\",
+          \"xPaddingPlacement\": \"${XPADDING_PLACEMENT}\",
+          \"xPaddingMethod\": \"${XPADDING_METHOD}\""
+        OBFS_EXTRA_FIELDS="\"xPaddingObfsMode\":true,\"xPaddingKey\":\"${XPADDING_KEY}\",\"xPaddingPlacement\":\"${XPADDING_PLACEMENT}\",\"xPaddingMethod\":\"${XPADDING_METHOD}\""
+        OBFS_STATUS="开启 (${XPADDING_PLACEMENT} / ${XPADDING_KEY} / ${XPADDING_METHOD})"
+    else
+        ARGO_OBFS_JSON=",
           \"xPaddingObfsMode\": true,
           \"xPaddingHeader\": \"${XPADDING_HEADER}\",
           \"xPaddingPlacement\": \"${XPADDING_PLACEMENT}\",
           \"xPaddingMethod\": \"${XPADDING_METHOD}\""
+        OBFS_EXTRA_FIELDS="\"xPaddingObfsMode\":true,\"xPaddingHeader\":\"${XPADDING_HEADER}\",\"xPaddingPlacement\":\"${XPADDING_PLACEMENT}\",\"xPaddingMethod\":\"${XPADDING_METHOD}\""
+        OBFS_STATUS="开启 (${XPADDING_PLACEMENT} / ${XPADDING_HEADER} / ${XPADDING_METHOD})"
+    fi
 else
     ARGO_OBFS_JSON=""
+    OBFS_STATUS="关闭 (默认 xPaddingBytes)"
 fi
 
 if [ -n "$XRAY_FLOW" ]; then
@@ -956,11 +1048,9 @@ fi
 
 FINAL_ADDR="${ADDR:-$CF_DOMAIN}"
 if [ "$OBFS_ENABLE" = "1" ]; then
-    EXTRA_JSON="{\"xPaddingBytes\":\"${XPADDING_BYTES}\",\"xPaddingObfsMode\":true,\"xPaddingHeader\":\"${XPADDING_HEADER}\",\"xPaddingPlacement\":\"${XPADDING_PLACEMENT}\",\"xPaddingMethod\":\"${XPADDING_METHOD}\",\"xmux\":{\"maxConnections\":\"1-3\",\"hMaxRequestTimes\":\"100-200\",\"hMaxReusableSecs\":\"30-60\",\"hKeepAlivePeriod\":15}}"
-    OBFS_STATUS="开启 (${XPADDING_PLACEMENT} / ${XPADDING_HEADER} / ${XPADDING_METHOD})"
+    EXTRA_JSON="{\"xPaddingBytes\":\"${XPADDING_BYTES}\",${OBFS_EXTRA_FIELDS},\"xmux\":{\"maxConnections\":\"1-3\",\"hMaxRequestTimes\":\"100-200\",\"hMaxReusableSecs\":\"30-60\",\"hKeepAlivePeriod\":15}}"
 else
     EXTRA_JSON="{\"xPaddingBytes\":\"${XPADDING_BYTES}\",\"xmux\":{\"maxConcurrency\":\"2-4\",\"hMaxRequestTimes\":\"100-200\",\"hMaxReusableSecs\":\"30-60\",\"hKeepAlivePeriod\":15}}"
-    OBFS_STATUS="关闭 (默认 xPaddingBytes)"
 fi
 EXTRA_PARAM="&extra=$(url_encode "$EXTRA_JSON")"
 
